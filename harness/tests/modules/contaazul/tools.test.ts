@@ -690,7 +690,7 @@ describe("Conta Azul mutation tools", () => {
       ...base,
       async getFinancialEventsByReference(params: unknown) {
         base.calls.push({ name: "getFinancialEventsByReference", payload: params });
-        return [];
+        throw new Error("financial event lookup failed");
       }
     };
     const tools = createContaAzulMutationTools({
@@ -723,11 +723,11 @@ describe("Conta Azul mutation tools", () => {
     expect(receipt.status).toBe("failed");
     expect(receipt.warnings.join(" ")).toContain("sale_uuid");
     expect(receipt.data?.result).toMatchObject({ orphanedSaleId: "sale_uuid", failedStep: "poll_financial_event" });
-    expect(base.calls.map((call) => call.name).slice(0, 2)).toEqual([
+    expect(base.calls.map((call) => call.name)).toEqual([
       "createServiceSale",
       "getFinancialEventsByReference"
     ]);
-  }, 30000);
+  });
 });
 
 async function tempLedgerPath(): Promise<string> {
