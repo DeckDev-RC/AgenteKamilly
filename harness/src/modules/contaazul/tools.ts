@@ -857,117 +857,155 @@ export function createContaAzulMutationTools(
         payload: salePayload
       });
       const saleId = extractRequiredString(saleResult, ["id"], "created sale id");
-      const createdSaleNumber = extractOptionalNumber(saleResult, ["number"]) ?? params.saleNumber;
-      const financialEvent = await pollFinancialEventForSale({
-        client: options.client,
-        authToken,
-        saleId,
-        maxAttempts: 10,
-        delayMs: 2000
-      });
-      const liveChargePayload = buildChargeRequestPayload({
-        financialAccountId,
-        installmentId: financialEvent.installmentId,
-        installmentVersion: financialEvent.installmentVersion,
-        originalDescription: `Venda ${createdSaleNumber}`,
-        dueDateIso: params.dueDateIso,
-        value: params.unitValue,
-        index: 1,
-        email: params.notification.email,
-        smsNumbers: compact([params.notification.phone]),
-        whatsappNumbers: compact([params.notification.phone])
-      });
-      const chargeResult = await options.client.createChargeRequest({
-        authToken,
-        payload: liveChargePayload
-      });
-      const chargeRequestId = extractChargeRequestId(chargeResult);
-      const liveNotificationPayload = buildChargeNotificationPayload({
-        customerName: params.customerName,
-        value: params.unitValue,
-        dueDateIso: params.dueDateIso,
-        saleNumber: createdSaleNumber,
-        email: params.notification.email,
-        replyTo: params.notification.replyTo ?? options.config.defaultReplyToEmail,
-        companyDisplayName:
-          params.notification.companyDisplayName ??
-          options.config.defaultCompanyDisplayName,
-        chargeRequestIds: [chargeRequestId]
-      });
-      const notificationResult = await options.client.sendChargeNotification({
-        authToken,
-        payload: liveNotificationPayload
-      });
-      const chargeRequestFromStatement = await pollChargeRequestFromFinancialStatement({
-        client: options.client,
-        authToken,
-        saleNumber: createdSaleNumber,
-        value: params.unitValue,
-        chargeRequestId,
-        maxAttempts: 20,
-        delayMs: 3000
-      });
-      const pdf = await options.client.downloadBoletoPdf({
-        authToken,
-        customerName: params.customerName,
-        chargeRequestId: chargeRequestFromStatement.chargeRequestId,
-        chargeUrl: chargeRequestFromStatement.chargeUrl
-      });
-      const pdfArtifactResult = await saveBinaryArtifact({
-        artifactsDir: options.artifactsDir,
-        provider: "contaazul",
-        operationId,
-        label: "boleto da venda",
-        fileName: `boleto_venda_${createdSaleNumber}.pdf`,
-        kind: "pdf",
-        contents: pdf
-      });
-      const resultSummary = {
-        saleId,
-        saleNumber: createdSaleNumber,
-        financialEventId: financialEvent.financialEventId,
-        installmentId: financialEvent.installmentId,
-        installmentVersion: financialEvent.installmentVersion,
-        chargeRequestId: chargeRequestFromStatement.chargeRequestId,
-        chargeUrl: chargeRequestFromStatement.chargeUrl,
-        chargeUrlSource: "financial_statement",
-        saleResult,
-        chargeResult,
-        notificationResult
-      };
-      const resultArtifact = await saveJsonArtifact({
-        artifactsDir: options.artifactsDir,
-        provider: "contaazul",
-        operationId,
-        label: "resultado da venda e boleto",
-        fileName: `resultado_venda_${createdSaleNumber}.json`,
-        contents: redact({
-          idempotencyKey,
-          approvalPreview,
-          result: resultSummary
-        })
-      });
+      let failedStep = "poll_financial_event";
 
-      return writeMutationReceipt({
-        ledgerPath: options.ledgerPath,
-        operationId,
-        runtimeMode,
-        toolName: CREATE_SERVICE_SALE_AND_ISSUE_BOLETO_TOOL,
-        status: "succeeded",
-        summary: "Venda de servico, boleto, notificacao e PDF gerados no Conta Azul.",
-        args: params,
-        data: {
-          ...data,
-          result: resultSummary
-        },
-        artifacts: [pdfArtifactResult, resultArtifact],
-        responseSummary: serviceSaleResponseSummary({
+      try {
+        const createdSaleNumber = extractOptionalNumber(saleResult, ["number"]) ?? params.saleNumber;
+        const financialEvent = await pollFinancialEventForSale({
+          client: options.client,
+          authToken,
+          saleId,
+          maxAttempts: 10,
+          delayMs: 2000
+        });
+
+        failedStep = "create_charge_request";
+        const liveChargePayload = buildChargeRequestPayload({
+          financialAccountId,
+          installmentId: financialEvent.installmentId,
+          installmentVersion: financialEvent.installmentVersion,
+          originalDescription: `Venda ${createdSaleNumber}`,
+          dueDateIso: params.dueDateIso,
+          value: params.unitValue,
+          index: 1,
+          email: params.notification.email,
+          smsNumbers: compact([params.notification.phone]),
+          whatsappNumbers: compact([params.notification.phone])
+        });
+        const chargeResult = await options.client.createChargeRequest({
+          authToken,
+          payload: liveChargePayload
+        });
+        const chargeRequestId = extractChargeRequestId(chargeResult);
+
+        failedStep = "send_notification";
+        const liveNotificationPayload = buildChargeNotificationPayload({
+          customerName: params.customerName,
+          value: params.unitValue,
+          dueDateIso: params.dueDateIso,
+          saleNumber: createdSaleNumber,
+          email: params.notification.email,
+          replyTo: params.notification.replyTo ?? options.config.defaultReplyToEmail,
+          companyDisplayName:
+            params.notification.companyDisplayName ??
+            options.config.defaultCompanyDisplayName,
+          chargeRequestIds: [chargeRequestId]
+        });
+        const notificationResult = await options.client.sendChargeNotification({
+          authToken,
+          payload: liveNotificationPayload
+        });
+
+        failedStep = "poll_charge_url";
+        const chargeRequestFromStatement = await pollChargeRequestFromFinancialStatement({
+          client: options.client,
+          authToken,
+          saleNumber: createdSaleNumber,
+          value: params.unitValue,
+          chargeRequestId,
+          maxAttempts: 20,
+          delayMs: 3000
+        });
+
+        failedStep = "download_pdf";
+        const pdf = await options.client.downloadBoletoPdf({
+          authToken,
+          customerName: params.customerName,
+          chargeRequestId: chargeRequestFromStatement.chargeRequestId,
+          chargeUrl: chargeRequestFromStatement.chargeUrl
+        });
+        const pdfArtifactResult = await saveBinaryArtifact({
+          artifactsDir: options.artifactsDir,
+          provider: "contaazul",
+          operationId,
+          label: "boleto da venda",
+          fileName: `boleto_venda_${createdSaleNumber}.pdf`,
+          kind: "pdf",
+          contents: pdf
+        });
+        const resultSummary = {
+          saleId,
+          saleNumber: createdSaleNumber,
+          financialEventId: financialEvent.financialEventId,
+          installmentId: financialEvent.installmentId,
+          installmentVersion: financialEvent.installmentVersion,
+          chargeRequestId: chargeRequestFromStatement.chargeRequestId,
+          chargeUrl: chargeRequestFromStatement.chargeUrl,
+          chargeUrlSource: "financial_statement",
+          saleResult,
+          chargeResult,
+          notificationResult
+        };
+        const resultArtifact = await saveJsonArtifact({
+          artifactsDir: options.artifactsDir,
+          provider: "contaazul",
+          operationId,
+          label: "resultado da venda e boleto",
+          fileName: `resultado_venda_${createdSaleNumber}.json`,
+          contents: redact({
+            idempotencyKey,
+            approvalPreview,
+            result: resultSummary
+          })
+        });
+
+        return writeMutationReceipt({
+          ledgerPath: options.ledgerPath,
+          operationId,
+          runtimeMode,
+          toolName: CREATE_SERVICE_SALE_AND_ISSUE_BOLETO_TOOL,
+          status: "succeeded",
           summary: "Venda de servico, boleto, notificacao e PDF gerados no Conta Azul.",
-          idempotencyKey,
-          params,
-          result: resultSummary
-        })
-      });
+          args: params,
+          data: {
+            ...data,
+            result: resultSummary
+          },
+          artifacts: [pdfArtifactResult, resultArtifact],
+          responseSummary: serviceSaleResponseSummary({
+            summary: "Venda de servico, boleto, notificacao e PDF gerados no Conta Azul.",
+            idempotencyKey,
+            params,
+            result: resultSummary
+          })
+        });
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : "etapa pos-venda falhou.";
+        const warning =
+          `Venda criada no Conta Azul (saleId=${saleId}) mas a etapa "${failedStep}" falhou: ${detail}. ` +
+          "Verifique e cancele a venda manualmente se necessario antes de tentar novamente.";
+        return writeMutationReceipt({
+          ledgerPath: options.ledgerPath,
+          operationId,
+          runtimeMode,
+          toolName: CREATE_SERVICE_SALE_AND_ISSUE_BOLETO_TOOL,
+          status: "failed",
+          summary: warning,
+          args: params,
+          data: {
+            ...data,
+            result: { orphanedSaleId: saleId, failedStep, error: detail }
+          },
+          artifacts: [pdfArtifact],
+          warnings: [warning],
+          responseSummary: {
+            summary: warning,
+            idempotencyKey,
+            orphanedSaleId: saleId,
+            failedStep
+          }
+        });
+      }
     }
   };
 }

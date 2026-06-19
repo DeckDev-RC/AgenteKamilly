@@ -682,6 +682,52 @@ describe("Conta Azul mutation tools", () => {
     expect(receipt.warnings.join(" ")).toContain("node contaazul/capture.js");
     expect(base.calls).toEqual([]);
   });
+
+  it("captures the orphaned sale id when a post-sale step fails", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "harness-contaazul-mutation-"));
+    const base = createFakeMutationClient({});
+    const client = {
+      ...base,
+      async getFinancialEventsByReference(params: unknown) {
+        base.calls.push({ name: "getFinancialEventsByReference", payload: params });
+        return [];
+      }
+    };
+    const tools = createContaAzulMutationTools({
+      client,
+      ledgerPath: path.join(dir, "ledger", "operations.jsonl"),
+      artifactsDir: path.join(dir, "artifacts"),
+      runtimeMode: "live",
+      allowLiveMutations: true,
+      config: mutationConfig(),
+      proSessionStore: new Map([["rel_001", "pro-token-test"]]),
+      operationIdFactory: () => "op_partial"
+    });
+
+    const receipt = await tools.createServiceSaleAndIssueBoleto({
+      relationId: "rel_001",
+      customerId: "person_uuid",
+      customerName: "Cliente Exemplo",
+      categoryId: "cat_uuid",
+      serviceItemId: "item_uuid",
+      serviceDescription: "Honorarios mensais",
+      unitValue: 250.75,
+      dueDateIso: "2026-07-20",
+      saleDateIso: "2026-06-19",
+      saleNumber: 123,
+      operationNatureId: "nature_uuid",
+      notification: { email: "cliente@example.test", phone: "11999999999" },
+      approvalText: "APROVAR op_partial"
+    });
+
+    expect(receipt.status).toBe("failed");
+    expect(receipt.warnings.join(" ")).toContain("sale_uuid");
+    expect(receipt.data?.result).toMatchObject({ orphanedSaleId: "sale_uuid", failedStep: "poll_financial_event" });
+    expect(base.calls.map((call) => call.name).slice(0, 2)).toEqual([
+      "createServiceSale",
+      "getFinancialEventsByReference"
+    ]);
+  }, 30000);
 });
 
 async function tempLedgerPath(): Promise<string> {
