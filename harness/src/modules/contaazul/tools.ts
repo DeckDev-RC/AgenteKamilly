@@ -1617,32 +1617,6 @@ async function pollFinancialEventForSale(input: {
   throw new Error(`Conta Azul financial event not found for sale ${input.saleId}.`);
 }
 
-async function pollChargeRequestUrl(input: {
-  client: ContaAzulMutationClient;
-  authToken: string;
-  financialEventId: string;
-  chargeRequestId: string;
-  maxAttempts: number;
-  delayMs: number;
-}): Promise<{ chargeUrl: string }> {
-  for (let attempt = 1; attempt <= input.maxAttempts; attempt++) {
-    const summary = await input.client.getFinancialEventSummary({
-      authToken: input.authToken,
-      financialEventId: input.financialEventId
-    });
-    const chargeRequest = extractChargeRequestFromSummary(summary, input.chargeRequestId);
-    if (chargeRequest) return chargeRequest;
-
-    if (attempt < input.maxAttempts) {
-      await sleep(input.delayMs);
-    }
-  }
-
-  throw new Error(
-    `Conta Azul charge request URL not found for charge ${input.chargeRequestId}.`
-  );
-}
-
 async function pollChargeRequestFromFinancialStatement(input: {
   client: ContaAzulMutationClient;
   authToken: string;
@@ -1731,26 +1705,6 @@ function extractChargeRequestFromStatementItems(input: {
 
     if (chargeRequestId === input.chargeRequestId && chargeUrl) {
       return { chargeRequestId, chargeUrl };
-    }
-  }
-
-  return undefined;
-}
-
-function extractChargeRequestFromSummary(
-  summary: unknown,
-  chargeRequestId: string
-): { chargeUrl: string } | undefined {
-  const installments = asArray(asRecord(asRecord(summary)?.paymentCondition)?.installments);
-
-  for (const installment of installments) {
-    const chargeRequests = asArray(asRecord(installment)?.chargeRequests);
-    for (const chargeRequest of chargeRequests) {
-      const record = asRecord(chargeRequest);
-      if (stringValue(record?.id) !== chargeRequestId) continue;
-
-      const chargeUrl = stringValue(record?.url);
-      if (chargeUrl) return { chargeUrl };
     }
   }
 
