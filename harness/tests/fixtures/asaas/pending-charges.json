@@ -1,0 +1,3 @@
+{
+  "content": "<tr data-payment-id=\"501\" data-billing-type=\"BOLETO\"><atlas-text ellipsis size=\"sm\">Cliente Exemplo Ltda</atlas-text><atlas-table-col><atlas-layout>R$ 120,50</atlas-layout></atlas-table-col><span tooltip=\"Aguardando pagamento\"></span><atlas-table-col>20/07/2026</atlas-table-col><atlas-table-col>HONORARIO MENSAL</atlas-table-col></tr><tr data-payment-id=\"502\" data-billing-type=\"BOLETO\"><atlas-text ellipsis size=\"sm\">Cliente Exemplo Ltda</atlas-text><atlas-table-col><atlas-layout>R$ 80,00</atlas-layout></atlas-table-col><span data-original-title=\"Recebida\"></span><atlas-table-col>10/07/2026</atlas-table-col></tr>"
+}

@@ -1,0 +1,30 @@
+# Secrets / sessions — never commit
+.env
+*.env
+state.json
+**/state.json
+
+# Operational data & generated artifacts
+artifacts/
+downloads/
+**/downloads/
+*.pdf
+*.png
+
+# Capture/debug logs (may contain cookies/tokens)
+captured_*.json
+*_network_log*.txt
+*_network_logs.json
+live_network_log.txt
+clientes_export.json
+clientes_cache.json
+
+# Screen recordings
+*.mp4
+
+# Dependencies / build
+node_modules/
+dist/
+coverage/
+
+# Keep the hardened harness ignore rules in harness/.gitignore as well

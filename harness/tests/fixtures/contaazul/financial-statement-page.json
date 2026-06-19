@@ -1,0 +1,13 @@
+{
+  "items": [
+    {
+      "id": "inst_001",
+      "financialEventId": "event_001",
+      "description": "Honorarios mensais",
+      "value": 250.75,
+      "date": "2026-07-20",
+      "customer": { "name": "Cliente Exemplo Ltda" },
+      "status": "OVERDUE"
+    }
+  ]
+}

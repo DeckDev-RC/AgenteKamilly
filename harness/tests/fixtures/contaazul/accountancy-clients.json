@@ -1,0 +1,18 @@
+{
+  "items": [
+    {
+      "id": "rel_001",
+      "relationId": "rel_001",
+      "tenantId": 101,
+      "name": "Cliente Exemplo Ltda",
+      "document": "00000000000000",
+      "active": true
+    },
+    {
+      "id": "rel_inactive",
+      "tenantId": 0,
+      "name": "Cliente Sem Tenant",
+      "active": true
+    }
+  ]
+}

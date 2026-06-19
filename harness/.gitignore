@@ -1,0 +1,12 @@
+.env
+*.env
+state.json
+artifacts/
+downloads/
+*.pdf
+*.png
+*.log
+captured_*.json
+node_modules/
+dist/
+coverage/
