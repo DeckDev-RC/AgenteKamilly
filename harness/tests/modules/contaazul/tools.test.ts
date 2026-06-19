@@ -559,6 +559,41 @@ describe("Conta Azul mutation tools", () => {
     });
   });
 
+  it("blocks a live service sale when the financial account id is not configured", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "harness-contaazul-mutation-"));
+    const client = createFakeMutationClient({});
+    const tools = createContaAzulMutationTools({
+      client,
+      ledgerPath: path.join(dir, "ledger", "operations.jsonl"),
+      artifactsDir: path.join(dir, "artifacts"),
+      runtimeMode: "live",
+      allowLiveMutations: true,
+      config: { financialAccountId: "", defaultReplyToEmail: "reply@example.test", defaultCompanyDisplayName: "Empresa Teste" },
+      proSessionStore: new Map([["rel_001", "pro-token-test"]]),
+      operationIdFactory: () => "op_no_account"
+    });
+
+    const receipt = await tools.createServiceSaleAndIssueBoleto({
+      relationId: "rel_001",
+      customerId: "person_uuid",
+      customerName: "Cliente Exemplo",
+      categoryId: "cat_uuid",
+      serviceItemId: "item_uuid",
+      serviceDescription: "Honorarios mensais",
+      unitValue: 250.75,
+      dueDateIso: "2026-07-20",
+      saleDateIso: "2026-06-19",
+      saleNumber: 123,
+      operationNatureId: "nature_uuid",
+      notification: { email: "cliente@example.test", phone: "11999999999" },
+      approvalText: "APROVAR op_no_account"
+    });
+
+    expect(receipt.status).toBe("blocked");
+    expect(receipt.warnings.join(" ")).toContain("CONTAAZUL_FINANCIAL_ACCOUNT_ID");
+    expect(client.calls).toEqual([]);
+  });
+
   it("blocks a repeated service sale when an idempotency match already succeeded", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "harness-contaazul-mutation-"));
     const client = createFakeMutationClient({});

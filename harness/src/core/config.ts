@@ -25,12 +25,9 @@ export function loadHarnessConfig(env: Env = process.env, cwd = process.cwd()): 
     asaasEnvPath: resolveHarnessPath(cwd, env.ASAAS_ENV_PATH ?? ".env"),
     contaAzulEnvPath: resolveHarnessPath(cwd, env.CONTAAZUL_ENV_PATH ?? "contaazul/.env"),
     contaAzulStatePath: resolveHarnessPath(cwd, env.CONTAAZUL_STATE_PATH ?? "contaazul/state.json"),
-    contaAzulFinancialAccountId:
-      env.CONTAAZUL_FINANCIAL_ACCOUNT_ID ?? "cf6eedce-10e8-4554-b707-9246826b12c6",
-    contaAzulDefaultReplyToEmail:
-      env.CONTAAZUL_DEFAULT_REPLY_TO_EMAIL ?? "sccontabilidadefinanceiro@gmail.com",
-    contaAzulDefaultCompanyDisplayName:
-      env.CONTAAZUL_DEFAULT_COMPANY_DISPLAY_NAME ?? "MAIS NEGOCIOS ASSESSORIA CONTABIL LTDA",
+    contaAzulFinancialAccountId: env.CONTAAZUL_FINANCIAL_ACCOUNT_ID ?? "",
+    contaAzulDefaultReplyToEmail: env.CONTAAZUL_DEFAULT_REPLY_TO_EMAIL ?? "",
+    contaAzulDefaultCompanyDisplayName: env.CONTAAZUL_DEFAULT_COMPANY_DISPLAY_NAME ?? "",
     artifactsDir,
     ledgerPath: resolveHarnessPath(
       cwd,

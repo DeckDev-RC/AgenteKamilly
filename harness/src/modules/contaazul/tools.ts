@@ -630,6 +630,33 @@ export function createContaAzulMutationTools(
         params.operationId ?? createOperationId(CREATE_SERVICE_SALE_AND_ISSUE_BOLETO_TOOL);
       const financialAccountId =
         params.financialAccountId ?? options.config.financialAccountId;
+      if (!financialAccountId) {
+        const warning =
+          "Conta financeira nao configurada: defina CONTAAZUL_FINANCIAL_ACCOUNT_ID antes de criar venda ao vivo.";
+        return writeMutationReceipt({
+          ledgerPath: options.ledgerPath,
+          operationId,
+          runtimeMode,
+          toolName: CREATE_SERVICE_SALE_AND_ISSUE_BOLETO_TOOL,
+          status: "blocked",
+          summary: warning,
+          args: params,
+          data: {
+            approvalPreview: {
+              operationId,
+              provider: "contaazul",
+              toolName: CREATE_SERVICE_SALE_AND_ISSUE_BOLETO_TOOL,
+              action: "create",
+              target: { customerId: params.customerId, customerName: params.customerName },
+              changes: [],
+              irreversible: false,
+              rollbackNote: "Nenhuma acao executada."
+            },
+            plannedRequests: []
+          },
+          warnings: [warning]
+        });
+      }
       const idempotencyKey =
         params.idempotencyKey ?? createServiceSaleIdempotencyKey(params, financialAccountId);
       const salePayload = buildServiceSalePayload({

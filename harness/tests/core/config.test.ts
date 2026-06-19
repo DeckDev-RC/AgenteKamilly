@@ -12,11 +12,9 @@ describe("harness config", () => {
     expect(config.contaAzulEnvPath).toBe("C:/Kamilly/harness/contaazul/.env");
     expect(config.contaAzulStatePath).toBe("C:/Kamilly/harness/contaazul/state.json");
     expect(config.ledgerPath).toBe("C:/Kamilly/harness/artifacts/ledger/operations.jsonl");
-    expect(config.contaAzulFinancialAccountId).toBe("cf6eedce-10e8-4554-b707-9246826b12c6");
-    expect(config.contaAzulDefaultReplyToEmail).toBe("sccontabilidadefinanceiro@gmail.com");
-    expect(config.contaAzulDefaultCompanyDisplayName).toBe(
-      "MAIS NEGOCIOS ASSESSORIA CONTABIL LTDA"
-    );
+    expect(config.contaAzulFinancialAccountId).toBe("");
+    expect(config.contaAzulDefaultReplyToEmail).toBe("");
+    expect(config.contaAzulDefaultCompanyDisplayName).toBe("");
   });
 
   it("honors explicit paths and live gates", () => {
