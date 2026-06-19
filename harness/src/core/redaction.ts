@@ -18,6 +18,7 @@ const SECRET_KEY_PATTERN =
 const EMAIL_KEY_PATTERN = /(^|[_-])e?mail([_-]|$)|email/i;
 const PHONE_KEY_PATTERN = /(phone|telefone|celular|whatsapp|mobile)/i;
 const DOCUMENT_KEY_PATTERN = /(cpf|cnpj|document|legalDocument|naturalDocument)/i;
+const PRESERVE_KEY_PATTERN = /^(operationId|duplicateOperationId|idempotencyKey|sha256|timestamp)$/;
 
 export function redactHeaders(headers: Record<string, unknown>): Record<string, unknown> {
   const output: Record<string, unknown> = {};
@@ -35,9 +36,9 @@ export function redactString(value: string): string {
       `$1=${SECRET_PLACEHOLDER}`
     )
     .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, EMAIL_PLACEHOLDER)
-    .replace(/\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b/g, DOCUMENT_PLACEHOLDER)
-    .replace(/\b\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}\b/g, DOCUMENT_PLACEHOLDER)
-    .replace(/(?:\+?55\s*)?(?:\(?\d{2}\)?\s*)9?\d{4}[-\s]?\d{4}/g, PHONE_PLACEHOLDER);
+    .replace(/\b\d{3}\.\d{3}\.\d{3}-\d{2}\b/g, DOCUMENT_PLACEHOLDER)
+    .replace(/\b\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}\b/g, DOCUMENT_PLACEHOLDER)
+    .replace(/(?<!\d)(?:\+55[\s-]?)?\(?\d{2}\)?[\s-]?9?\d{4}-\d{4}(?!\d)/g, PHONE_PLACEHOLDER);
 }
 
 export function redact<T>(value: T): T {
@@ -69,6 +70,9 @@ function redactUnknown(value: unknown): unknown {
 }
 
 function redactValueForKey(key: string, value: unknown): unknown {
+  if (PRESERVE_KEY_PATTERN.test(key) && (typeof value === "string" || typeof value === "number")) {
+    return value;
+  }
   if (EMAIL_KEY_PATTERN.test(key)) return EMAIL_PLACEHOLDER;
   if (PHONE_KEY_PATTERN.test(key)) return PHONE_PLACEHOLDER;
   if (DOCUMENT_KEY_PATTERN.test(key)) return DOCUMENT_PLACEHOLDER;
