@@ -63,6 +63,7 @@ type Route = {
   intent: string;
   toolName: string;
   requiredFields: string[];
+  priority: number;
   match: (request: string) => boolean;
 };
 
@@ -189,7 +190,10 @@ export async function planOrchestratorTurn(
       route,
       missingFields: route.requiredFields.filter((field) => !hasParam(params, field))
     }))
-    .sort((a, b) => a.missingFields.length - b.missingFields.length)[0];
+    .sort((a, b) =>
+      a.missingFields.length - b.missingFields.length ||
+      b.route.priority - a.route.priority
+    )[0];
   const route = routeMatch?.route;
 
   if (!route) {
@@ -271,6 +275,7 @@ const ROUTES: Route[] = [
     intent: "search_customers",
     toolName: "asaas.search_customers",
     requiredFields: [],
+    priority: 0,
     match: (request) => hasAll(request, ["asaas", "cliente"]) && hasAny(request, ["buscar", "pesquisar", "procurar"])
   },
   {
@@ -278,6 +283,7 @@ const ROUTES: Route[] = [
     intent: "list_pending_charges",
     toolName: "asaas.list_pending_charges",
     requiredFields: ["customerId"],
+    priority: 0,
     match: (request) => hasAll(request, ["asaas"]) && request.includes("pendente")
   },
   {
@@ -285,6 +291,7 @@ const ROUTES: Route[] = [
     intent: "get_charge_links",
     toolName: "asaas.get_charge_links",
     requiredFields: ["chargeId"],
+    priority: 0,
     match: (request) => hasAll(request, ["asaas"]) && hasAny(request, ["link", "fatura", "boleto"])
   },
   {
@@ -292,6 +299,7 @@ const ROUTES: Route[] = [
     intent: "update_charge_due_date",
     toolName: "asaas.update_charge_due_date",
     requiredFields: ["chargeId", "dueDateBr"],
+    priority: 0,
     match: (request) => hasAll(request, ["asaas"]) && hasAny(request, ["vencimento", "vencer", "alterar"])
   },
   {
@@ -299,6 +307,7 @@ const ROUTES: Route[] = [
     intent: "create_boleto_charge",
     toolName: "asaas.create_boleto_charge",
     requiredFields: ["customerId", "valueBr", "dueDateBr", "description"],
+    priority: 10,
     match: (request) => hasAll(request, ["asaas", "boleto"]) && hasAny(request, ["criar", "emitir", "gerar"])
   },
   {
@@ -306,6 +315,7 @@ const ROUTES: Route[] = [
     intent: "create_boleto_charge_workflow",
     toolName: "asaas.create_boleto_charge_workflow",
     requiredFields: ["customerName", "valueBr", "dueDateBr", "description"],
+    priority: 5,
     match: (request) => hasAll(request, ["asaas", "boleto"]) && hasAny(request, ["criar", "emitir", "gerar"])
   },
   {
@@ -313,6 +323,7 @@ const ROUTES: Route[] = [
     intent: "list_accountancy_clients",
     toolName: "contaazul.list_accountancy_clients",
     requiredFields: [],
+    priority: 0,
     match: (request) => hasAll(request, ["conta azul"]) && hasAny(request, ["clientes", "empresas"])
   },
   {
@@ -320,6 +331,7 @@ const ROUTES: Route[] = [
     intent: "switch_to_pro_session",
     toolName: "contaazul.switch_to_pro_session",
     requiredFields: ["relationId"],
+    priority: 0,
     match: (request) => hasAll(request, ["conta azul"]) && hasAny(request, ["sessao", "pro"])
   },
   {
@@ -327,6 +339,7 @@ const ROUTES: Route[] = [
     intent: "search_financial_statement",
     toolName: "contaazul.search_financial_statement",
     requiredFields: ["relationId"],
+    priority: 0,
     match: (request) => hasAll(request, ["conta azul"]) && hasAny(request, ["extrato", "lancamento", "movimentacao"])
   },
   {
@@ -344,6 +357,7 @@ const ROUTES: Route[] = [
       "installmentVersion",
       "installmentIndex"
     ],
+    priority: 0,
     match: (request) =>
       hasAll(request, ["conta azul"]) &&
       hasAny(request, ["reemitir", "vencimento"])
@@ -353,6 +367,7 @@ const ROUTES: Route[] = [
     intent: "create_customer",
     toolName: "contaazul.create_customer",
     requiredFields: ["relationId", "person"],
+    priority: 0,
     match: (request) => hasAll(request, ["conta azul", "cliente"]) && hasAny(request, ["cadastrar", "criar"])
   },
   {
@@ -369,6 +384,7 @@ const ROUTES: Route[] = [
       "dueDateIsoOrBr",
       "notification"
     ],
+    priority: 5,
     match: (request) =>
       hasAll(request, ["conta azul"]) &&
       hasAny(request, ["venda", "servico", "servico"]) &&
@@ -392,6 +408,7 @@ const ROUTES: Route[] = [
       "operationNatureId",
       "notification"
     ],
+    priority: 10,
     match: (request) =>
       hasAll(request, ["conta azul"]) &&
       hasAny(request, ["venda", "servico", "servico"]) &&

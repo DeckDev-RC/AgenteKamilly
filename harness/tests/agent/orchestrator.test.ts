@@ -143,6 +143,36 @@ describe("agent orchestrator", () => {
     });
     expect(calls).toEqual([params]);
   });
+
+  it("prefers the exact-id Asaas tool when both id and name are provided", async () => {
+    const registry = createToolRegistry();
+
+    registerHarnessTools(registry, {
+      asaasMutation: {
+        createBoletoCharge: async () =>
+          receipt("asaas.create_boleto_charge", { plannedRequest: { method: "POST", url: "x" } }),
+        createBoletoChargeWorkflow: async () =>
+          receipt("asaas.create_boleto_charge_workflow", { plannedRequest: { method: "POST", url: "y" } })
+      }
+    });
+
+    const result = await planOrchestratorTurn({
+      request: "criar boleto no Asaas",
+      registry,
+      params: {
+        customerId: "cust_1",
+        customerName: "Cliente Exemplo",
+        valueBr: "120,00",
+        dueDateBr: "20/07/2026",
+        description: "Honorarios"
+      }
+    });
+
+    expect(result).toMatchObject({
+      status: "executed",
+      toolName: "asaas.create_boleto_charge"
+    });
+  });
 });
 
 function receipt<T>(toolName: string, data: T): ToolReceipt<T> {
