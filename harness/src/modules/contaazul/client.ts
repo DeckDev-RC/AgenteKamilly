@@ -115,6 +115,7 @@ export type ContaAzulMutationClient = ContaAzulReadClient & {
   getFinancialEventsByReference(params: GetFinancialEventsByReferenceParams): Promise<unknown[]>;
   getFinancialEventSummary(params: GetFinancialEventSummaryParams): Promise<unknown>;
   downloadBoletoPdf(params: DownloadBoletoPdfParams): Promise<Buffer>;
+  verifyProSession?(params: { authToken: string }): Promise<boolean>;
 };
 
 export class ContaAzulSessionExpiredError extends Error {
@@ -469,6 +470,14 @@ export class MappedContaAzulSessionClient implements ContaAzulMutationClient {
       throw new Error(`Conta Azul boleto PDF download failed with HTTP ${response.status}.`);
     }
     return Buffer.from(await response.arrayBuffer());
+  }
+
+  async verifyProSession(params: { authToken: string }): Promise<boolean> {
+    const response = await this.request(`${SERVICES_BASE_URL}/app/v1/negotiations/next-number`, {
+      headers: proReadHeaders(params.authToken)
+    });
+    assertNotExpired(response);
+    return response.ok;
   }
 
   private maisHeaders(): Record<string, string> {

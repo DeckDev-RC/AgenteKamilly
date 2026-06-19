@@ -828,6 +828,30 @@ export function createContaAzulMutationTools(
         throw new Error("Conta Azul Pro session unexpectedly missing after validation.");
       }
 
+      if (options.client.verifyProSession) {
+        try {
+          const ok = await options.client.verifyProSession({ authToken });
+          if (!ok) throw new ContaAzulSessionExpiredError();
+        } catch (error) {
+          if (error instanceof ContaAzulSessionExpiredError) {
+            const warning = `${error.message} Recapture session with ${error.recaptureCommand}.`;
+            return writeMutationReceipt({
+              ledgerPath: options.ledgerPath,
+              operationId,
+              runtimeMode,
+              toolName: CREATE_SERVICE_SALE_AND_ISSUE_BOLETO_TOOL,
+              status: "blocked",
+              summary: warning,
+              args: params,
+              data,
+              artifacts: [pdfArtifact],
+              warnings: [warning]
+            });
+          }
+          throw error;
+        }
+      }
+
       const saleResult = await options.client.createServiceSale({
         authToken,
         payload: salePayload

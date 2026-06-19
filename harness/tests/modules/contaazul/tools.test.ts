@@ -641,6 +641,47 @@ describe("Conta Azul mutation tools", () => {
     expect(repeated.warnings[0]).toContain("op_sale_first");
     expect(client.calls).toHaveLength(callCountAfterFirst);
   });
+
+  it("blocks a live sale with recapture guidance when the Pro session is expired", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "harness-contaazul-mutation-"));
+    const base = createFakeMutationClient({});
+    const client = {
+      ...base,
+      async verifyProSession() {
+        throw new ContaAzulSessionExpiredError("Conta Azul session expired.");
+      }
+    };
+    const tools = createContaAzulMutationTools({
+      client,
+      ledgerPath: path.join(dir, "ledger", "operations.jsonl"),
+      artifactsDir: path.join(dir, "artifacts"),
+      runtimeMode: "live",
+      allowLiveMutations: true,
+      config: mutationConfig(),
+      proSessionStore: new Map([["rel_001", "pro-token-test"]]),
+      operationIdFactory: () => "op_expired_sale"
+    });
+
+    const receipt = await tools.createServiceSaleAndIssueBoleto({
+      relationId: "rel_001",
+      customerId: "person_uuid",
+      customerName: "Cliente Exemplo",
+      categoryId: "cat_uuid",
+      serviceItemId: "item_uuid",
+      serviceDescription: "Honorarios mensais",
+      unitValue: 250.75,
+      dueDateIso: "2026-07-20",
+      saleDateIso: "2026-06-19",
+      saleNumber: 123,
+      operationNatureId: "nature_uuid",
+      notification: { email: "cliente@example.test", phone: "11999999999" },
+      approvalText: "APROVAR op_expired_sale"
+    });
+
+    expect(receipt.status).toBe("blocked");
+    expect(receipt.warnings.join(" ")).toContain("node contaazul/capture.js");
+    expect(base.calls).toEqual([]);
+  });
 });
 
 async function tempLedgerPath(): Promise<string> {
