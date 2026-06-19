@@ -15,4 +15,15 @@ describe("approval parser", () => {
     expect(parseApprovalText("aprovar op_123", "op_123").approved).toBe(false);
     expect(parseApprovalText("APROVAR op_other", "op_123").approved).toBe(false);
   });
+
+  it("accepts approval text with surrounding whitespace", () => {
+    expect(parseApprovalText("  APROVAR op_123\n", "op_123")).toEqual({
+      approved: true,
+      operationId: "op_123"
+    });
+  });
+
+  it("still rejects internal-only differences after trimming", () => {
+    expect(parseApprovalText("APROVAR  op_123", "op_123").approved).toBe(false);
+  });
 });

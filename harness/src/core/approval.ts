@@ -4,7 +4,7 @@ export type ApprovalParseResult =
 
 export function parseApprovalText(input: string, operationId: string): ApprovalParseResult {
   const expected = `APROVAR ${operationId}`;
-  if (input === expected) {
+  if (input.trim() === expected) {
     return { approved: true, operationId };
   }
   return { approved: false };
