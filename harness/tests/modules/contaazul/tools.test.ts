@@ -728,6 +728,382 @@ describe("Conta Azul mutation tools", () => {
       "getFinancialEventsByReference"
     ]);
   });
+
+  it("blocks a repeated service sale after a partial failure created an orphaned sale", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "harness-contaazul-mutation-"));
+    const base = createFakeMutationClient({});
+    const client = {
+      ...base,
+      async getFinancialEventsByReference(params: unknown) {
+        base.calls.push({ name: "getFinancialEventsByReference", payload: params });
+        throw new Error("financial event lookup failed");
+      }
+    };
+    const tools = createContaAzulMutationTools({
+      client,
+      ledgerPath: path.join(dir, "ledger", "operations.jsonl"),
+      artifactsDir: path.join(dir, "artifacts"),
+      runtimeMode: "live",
+      allowLiveMutations: true,
+      config: mutationConfig(),
+      proSessionStore: new Map([["rel_001", "pro-token-test"]])
+    });
+    const params = {
+      relationId: "rel_001",
+      customerId: "person_uuid",
+      customerName: "Cliente Exemplo",
+      categoryId: "cat_uuid",
+      serviceItemId: "item_uuid",
+      serviceDescription: "Honorarios mensais",
+      unitValue: 250.75,
+      dueDateIso: "2026-07-20",
+      saleDateIso: "2026-06-19",
+      saleNumber: 123,
+      operationNatureId: "nature_uuid",
+      notification: { email: "cliente@example.test", phone: "11999999999" }
+    };
+
+    const first = await tools.createServiceSaleAndIssueBoleto({
+      ...params,
+      operationId: "op_partial_first",
+      approvalText: "APROVAR op_partial_first"
+    });
+    const callCountAfterFirst = base.calls.length;
+    const repeated = await tools.createServiceSaleAndIssueBoleto({
+      ...params,
+      operationId: "op_partial_repeat",
+      approvalText: "APROVAR op_partial_repeat"
+    });
+
+    expect(first.status).toBe("failed");
+    expect(first.data?.result).toMatchObject({ orphanedSaleId: "sale_uuid" });
+    expect(repeated.status).toBe("blocked");
+    expect(repeated.warnings.join(" ")).toContain("op_partial_first");
+    expect(repeated.warnings.join(" ")).toContain("sale_uuid");
+    expect(base.calls).toHaveLength(callCountAfterFirst);
+  });
+
+  it("allows retry after an orphaned sale cleanup is acknowledged", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "harness-contaazul-mutation-"));
+    const base = createFakeMutationClient({});
+    const client = {
+      ...base,
+      async getFinancialEventsByReference(params: unknown) {
+        base.calls.push({ name: "getFinancialEventsByReference", payload: params });
+        throw new Error("financial event lookup failed");
+      }
+    };
+    const ledgerPath = path.join(dir, "ledger", "operations.jsonl");
+    const tools = createContaAzulMutationTools({
+      client,
+      ledgerPath,
+      artifactsDir: path.join(dir, "artifacts"),
+      runtimeMode: "live",
+      allowLiveMutations: true,
+      config: mutationConfig(),
+      proSessionStore: new Map([["rel_001", "pro-token-test"]])
+    });
+    const params = {
+      relationId: "rel_001",
+      customerId: "person_uuid",
+      customerName: "Cliente Exemplo",
+      categoryId: "cat_uuid",
+      serviceItemId: "item_uuid",
+      serviceDescription: "Honorarios mensais",
+      unitValue: 250.75,
+      dueDateIso: "2026-07-20",
+      saleDateIso: "2026-06-19",
+      saleNumber: 123,
+      operationNatureId: "nature_uuid",
+      notification: { email: "cliente@example.test", phone: "11999999999" }
+    };
+
+    await tools.createServiceSaleAndIssueBoleto({
+      ...params,
+      operationId: "op_partial_first",
+      approvalText: "APROVAR op_partial_first"
+    });
+    await expect(
+      tools.createServiceSaleAndIssueBoleto({
+        ...params,
+        operationId: "op_partial_blocked",
+        approvalText: "APROVAR op_partial_blocked"
+      })
+    ).resolves.toMatchObject({ status: "blocked" });
+
+    const ack = await tools.acknowledgeOrphanCleanup({
+      operationId: "op_ack_cleanup",
+      previousOperationId: "op_partial_first",
+      orphanedSaleId: "sale_uuid",
+      cleanupAction: "cancelled",
+      approvalText: "APROVAR op_ack_cleanup"
+    });
+    const callCountAfterAck = base.calls.length;
+    const repeated = await tools.createServiceSaleAndIssueBoleto({
+      ...params,
+      operationId: "op_partial_after_ack",
+      approvalText: "APROVAR op_partial_after_ack"
+    });
+
+    expect(ack.status).toBe("succeeded");
+    expect(ack.data?.result).toMatchObject({
+      cleanupForOperationId: "op_partial_first",
+      orphanedSaleId: "sale_uuid",
+      cleanupAction: "cancelled"
+    });
+    expect(repeated.status).toBe("failed");
+    expect(base.calls.slice(callCountAfterAck).map((call) => call.name)).toEqual([
+      "createServiceSale",
+      "getFinancialEventsByReference"
+    ]);
+
+    const entries = await readLedgerEntries(ledgerPath);
+    expect(entries.find((entry) => entry.operationId === "op_ack_cleanup")).toMatchObject({
+      status: "succeeded",
+      responseSummary: {
+        cleanupForOperationId: "op_partial_first",
+        orphanedSaleId: "sale_uuid",
+        cleanupAction: "cancelled"
+      }
+    });
+  });
+
+  it("blocks orphan cleanup acknowledgement without a matching partial failure", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "harness-contaazul-mutation-"));
+    const client = createFakeMutationClient({});
+    const tools = createContaAzulMutationTools({
+      client,
+      ledgerPath: path.join(dir, "ledger", "operations.jsonl"),
+      artifactsDir: path.join(dir, "artifacts"),
+      runtimeMode: "live",
+      allowLiveMutations: true,
+      config: mutationConfig(),
+      proSessionStore: new Map([["rel_001", "pro-token-test"]]),
+      operationIdFactory: () => "op_ack_missing"
+    });
+
+    const receipt = await tools.acknowledgeOrphanCleanup({
+      previousOperationId: "op_missing",
+      orphanedSaleId: "sale_uuid",
+      cleanupAction: "cancelled",
+      approvalText: "APROVAR op_ack_missing"
+    });
+
+    expect(receipt.status).toBe("blocked");
+    expect(receipt.warnings.join(" ")).toContain("Nenhuma falha parcial");
+    expect(client.calls).toEqual([]);
+  });
+
+  it("blocks orphan cleanup acknowledgement without exact approval and keeps retry blocked", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "harness-contaazul-mutation-"));
+    const base = createFakeMutationClient({});
+    const client = {
+      ...base,
+      async getFinancialEventsByReference(params: unknown) {
+        base.calls.push({ name: "getFinancialEventsByReference", payload: params });
+        throw new Error("financial event lookup failed");
+      }
+    };
+    const tools = createContaAzulMutationTools({
+      client,
+      ledgerPath: path.join(dir, "ledger", "operations.jsonl"),
+      artifactsDir: path.join(dir, "artifacts"),
+      runtimeMode: "live",
+      allowLiveMutations: true,
+      config: mutationConfig(),
+      proSessionStore: new Map([["rel_001", "pro-token-test"]])
+    });
+    const params = {
+      relationId: "rel_001",
+      customerId: "person_uuid",
+      customerName: "Cliente Exemplo",
+      categoryId: "cat_uuid",
+      serviceItemId: "item_uuid",
+      serviceDescription: "Honorarios mensais",
+      unitValue: 250.75,
+      dueDateIso: "2026-07-20",
+      saleDateIso: "2026-06-19",
+      saleNumber: 123,
+      operationNatureId: "nature_uuid",
+      notification: { email: "cliente@example.test", phone: "11999999999" }
+    };
+
+    await tools.createServiceSaleAndIssueBoleto({
+      ...params,
+      operationId: "op_partial_first",
+      approvalText: "APROVAR op_partial_first"
+    });
+    const ack = await tools.acknowledgeOrphanCleanup({
+      operationId: "op_ack_wrong",
+      previousOperationId: "op_partial_first",
+      orphanedSaleId: "sale_uuid",
+      cleanupAction: "cancelled",
+      approvalText: "APROVAR outro_id"
+    });
+    const callCountAfterAck = base.calls.length;
+    const repeated = await tools.createServiceSaleAndIssueBoleto({
+      ...params,
+      operationId: "op_partial_still_blocked",
+      approvalText: "APROVAR op_partial_still_blocked"
+    });
+
+    expect(ack.status).toBe("blocked");
+    expect(ack.warnings.join(" ")).toContain("exact operation id");
+    expect(repeated.status).toBe("blocked");
+    expect(base.calls).toHaveLength(callCountAfterAck);
+  });
+
+  it("plans orphan cleanup acknowledgement in dry-run without releasing retry", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "harness-contaazul-mutation-"));
+    const base = createFakeMutationClient({});
+    const client = {
+      ...base,
+      async getFinancialEventsByReference(params: unknown) {
+        base.calls.push({ name: "getFinancialEventsByReference", payload: params });
+        throw new Error("financial event lookup failed");
+      }
+    };
+    const ledgerPath = path.join(dir, "ledger", "operations.jsonl");
+    const liveTools = createContaAzulMutationTools({
+      client,
+      ledgerPath,
+      artifactsDir: path.join(dir, "artifacts"),
+      runtimeMode: "live",
+      allowLiveMutations: true,
+      config: mutationConfig(),
+      proSessionStore: new Map([["rel_001", "pro-token-test"]])
+    });
+    const dryRunTools = createContaAzulMutationTools({
+      client,
+      ledgerPath,
+      artifactsDir: path.join(dir, "artifacts"),
+      runtimeMode: "dry-run",
+      allowLiveMutations: false,
+      config: mutationConfig(),
+      proSessionStore: new Map([["rel_001", "pro-token-test"]])
+    });
+    const params = {
+      relationId: "rel_001",
+      customerId: "person_uuid",
+      customerName: "Cliente Exemplo",
+      categoryId: "cat_uuid",
+      serviceItemId: "item_uuid",
+      serviceDescription: "Honorarios mensais",
+      unitValue: 250.75,
+      dueDateIso: "2026-07-20",
+      saleDateIso: "2026-06-19",
+      saleNumber: 123,
+      operationNatureId: "nature_uuid",
+      notification: { email: "cliente@example.test", phone: "11999999999" }
+    };
+
+    await liveTools.createServiceSaleAndIssueBoleto({
+      ...params,
+      operationId: "op_partial_first",
+      approvalText: "APROVAR op_partial_first"
+    });
+    const ack = await dryRunTools.acknowledgeOrphanCleanup({
+      operationId: "op_ack_dry_run",
+      previousOperationId: "op_partial_first",
+      orphanedSaleId: "sale_uuid",
+      cleanupAction: "cancelled"
+    });
+    const callCountAfterAck = base.calls.length;
+    const repeated = await liveTools.createServiceSaleAndIssueBoleto({
+      ...params,
+      operationId: "op_partial_after_dry_run_ack",
+      approvalText: "APROVAR op_partial_after_dry_run_ack"
+    });
+
+    expect(ack.status).toBe("planned");
+    expect(ack.dryRun).toBe(true);
+    expect(repeated.status).toBe("blocked");
+    expect(base.calls).toHaveLength(callCountAfterAck);
+  });
+
+  it("records a failed preflight when Pro session verification returns a non-expiry failure", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "harness-contaazul-mutation-"));
+    const base = createFakeMutationClient({});
+    const client = {
+      ...base,
+      async verifyProSession() {
+        return false;
+      }
+    };
+    const tools = createContaAzulMutationTools({
+      client,
+      ledgerPath: path.join(dir, "ledger", "operations.jsonl"),
+      artifactsDir: path.join(dir, "artifacts"),
+      runtimeMode: "live",
+      allowLiveMutations: true,
+      config: mutationConfig(),
+      proSessionStore: new Map([["rel_001", "pro-token-test"]]),
+      operationIdFactory: () => "op_health_check_failed"
+    });
+
+    const receipt = await tools.createServiceSaleAndIssueBoleto({
+      relationId: "rel_001",
+      customerId: "person_uuid",
+      customerName: "Cliente Exemplo",
+      categoryId: "cat_uuid",
+      serviceItemId: "item_uuid",
+      serviceDescription: "Honorarios mensais",
+      unitValue: 250.75,
+      dueDateIso: "2026-07-20",
+      saleDateIso: "2026-06-19",
+      saleNumber: 123,
+      operationNatureId: "nature_uuid",
+      notification: { email: "cliente@example.test", phone: "11999999999" },
+      approvalText: "APROVAR op_health_check_failed"
+    });
+
+    expect(receipt.status).toBe("failed");
+    expect(receipt.warnings.join(" ")).toContain("health check failed");
+    expect(receipt.warnings.join(" ")).not.toContain("capture");
+    expect(base.calls).toEqual([]);
+  });
+
+  it("records a failed preflight when Pro session verification throws a technical error", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "harness-contaazul-mutation-"));
+    const base = createFakeMutationClient({});
+    const client = {
+      ...base,
+      async verifyProSession() {
+        throw new Error("Conta Azul Pro session health check failed with HTTP 500.");
+      }
+    };
+    const tools = createContaAzulMutationTools({
+      client,
+      ledgerPath: path.join(dir, "ledger", "operations.jsonl"),
+      artifactsDir: path.join(dir, "artifacts"),
+      runtimeMode: "live",
+      allowLiveMutations: true,
+      config: mutationConfig(),
+      proSessionStore: new Map([["rel_001", "pro-token-test"]]),
+      operationIdFactory: () => "op_health_check_500"
+    });
+
+    const receipt = await tools.createServiceSaleAndIssueBoleto({
+      relationId: "rel_001",
+      customerId: "person_uuid",
+      customerName: "Cliente Exemplo",
+      categoryId: "cat_uuid",
+      serviceItemId: "item_uuid",
+      serviceDescription: "Honorarios mensais",
+      unitValue: 250.75,
+      dueDateIso: "2026-07-20",
+      saleDateIso: "2026-06-19",
+      saleNumber: 123,
+      operationNatureId: "nature_uuid",
+      notification: { email: "cliente@example.test", phone: "11999999999" },
+      approvalText: "APROVAR op_health_check_500"
+    });
+
+    expect(receipt.status).toBe("failed");
+    expect(receipt.warnings.join(" ")).toContain("HTTP 500");
+    expect(receipt.warnings.join(" ")).not.toContain("capture");
+    expect(base.calls).toEqual([]);
+  });
 });
 
 async function tempLedgerPath(): Promise<string> {

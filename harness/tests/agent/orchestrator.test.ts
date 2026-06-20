@@ -144,6 +144,50 @@ describe("agent orchestrator", () => {
     expect(calls).toEqual([params]);
   });
 
+  it("routes Conta Azul orphan cleanup acknowledgements", async () => {
+    const registry = createToolRegistry();
+    const calls: unknown[] = [];
+
+    registerHarnessTools(registry, {
+      contaAzulMutation: {
+        acknowledgeOrphanCleanup: async (params) => {
+          calls.push(params);
+          return receipt("contaazul.acknowledge_orphan_cleanup", {
+            approvalPreview: {
+              operationId: "op_ack",
+              provider: "contaazul",
+              toolName: "contaazul.acknowledge_orphan_cleanup",
+              action: "update",
+              target: { saleId: "sale_uuid" },
+              changes: [],
+              irreversible: false,
+              rollbackNote: "test"
+            },
+            plannedRequests: []
+          });
+        }
+      }
+    });
+
+    const params = {
+      previousOperationId: "op_partial_first",
+      orphanedSaleId: "sale_uuid",
+      cleanupAction: "cancelled"
+    };
+
+    const result = await planOrchestratorTurn({
+      request: "reconhecer limpeza de venda orfa no Conta Azul",
+      registry,
+      params
+    });
+
+    expect(result).toMatchObject({
+      status: "executed",
+      toolName: "contaazul.acknowledge_orphan_cleanup"
+    });
+    expect(calls).toEqual([params]);
+  });
+
   it("prefers the exact-id Asaas tool when both id and name are provided", async () => {
     const registry = createToolRegistry();
 

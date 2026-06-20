@@ -17,6 +17,7 @@ import type {
   ContaAzulReadTools
 } from "../modules/contaazul/tools.js";
 import {
+  ContaAzulAcknowledgeOrphanCleanupParamsSchema,
   ContaAzulCreateCustomerParamsSchema,
   ContaAzulCreateServiceSaleAndIssueBoletoParamsSchema,
   ContaAzulSearchFinancialStatementParamsSchema,
@@ -151,6 +152,13 @@ export function registerHarnessTools(registry: ToolRegistry, toolset: HarnessToo
     "contaazul.create_customer",
     "Plan or execute Conta Azul customer creation.",
     ContaAzulCreateCustomerParamsSchema
+  );
+  registerIfPresent(
+    registry,
+    toolset.contaAzulMutation?.acknowledgeOrphanCleanup,
+    "contaazul.acknowledge_orphan_cleanup",
+    "Acknowledge manual cleanup of an orphaned Conta Azul sale before allowing a retry.",
+    ContaAzulAcknowledgeOrphanCleanupParamsSchema
   );
   registerIfPresent(
     registry,
@@ -372,6 +380,16 @@ const ROUTES: Route[] = [
   },
   {
     provider: "contaazul",
+    intent: "acknowledge_orphan_cleanup",
+    toolName: "contaazul.acknowledge_orphan_cleanup",
+    requiredFields: ["previousOperationId", "orphanedSaleId", "cleanupAction"],
+    priority: 20,
+    match: (request) =>
+      hasAll(request, ["conta azul"]) &&
+      hasAny(request, ["orfa", "orfao", "cleanup", "limpeza", "cancelada", "cancelado", "reconhecer"])
+  },
+  {
+    provider: "contaazul",
     intent: "create_service_sale_boleto_workflow",
     toolName: "contaazul.create_service_sale_boleto_workflow",
     requiredFields: [
@@ -461,6 +479,9 @@ function questionForField(field: string): string {
     saleDateIso: "Qual e a data da venda no formato aaaa-mm-dd?",
     saleNumber: "Qual numero de venda deve ser usado?",
     operationNatureId: "Qual e o ID da natureza de operacao?",
+    previousOperationId: "Qual operationId da falha parcial deve ser liberado?",
+    orphanedSaleId: "Qual saleId da venda orfa foi tratado manualmente?",
+    cleanupAction: "A venda orfa foi cancelada ou verificada como nao criada?",
     notification: "Quais dados de notificacao devo usar: email, telefone, replyTo e nome exibido?",
     person: "Quais dados completos do cliente devem ser cadastrados?",
     chargeId: "Qual e o ID da cobranca?",

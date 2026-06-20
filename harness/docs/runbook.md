@@ -41,7 +41,15 @@ Conta Azul service-sale workflow by names:
 npm run dev -- --dry-run "criar venda de servico e emitir boleto no Conta Azul" --params '{ "tenantId": 3047702, "customerName": "AZUOS ASSESSORIA CONTABIL LTDA", "categoryName": "Honorario contabil mensal", "itemName": "Honorario Contabil", "serviceDescription": "Honorario mensal", "unitValue": 10, "dueDateIso": "2026-06-30", "notification": { "email": "cliente@example.test", "phone": "62999999999", "replyTo": "financeiro@example.test", "companyDisplayName": "MAIS NEGOCIOS" } }'
 ```
 
-The workflow resolves the Conta Azul Mais tenant, switches to the Pro session, resolves customer/category/service item/operation nature, gets the next sale number, then calls the mapped sale/boleto/notification/PDF tool. The planned receipt includes an `idempotencyKey`; a later live retry with the same logical sale is blocked if a succeeded ledger entry already exists.
+The workflow resolves the Conta Azul Mais tenant, switches to the Pro session, resolves customer/category/service item/operation nature, gets the next sale number, then calls the mapped sale/boleto/notification/PDF tool. The planned receipt includes an `idempotencyKey`; a later live retry with the same logical sale is blocked if a succeeded ledger entry already exists or if a previous partial failure already created an orphaned sale.
+
+If a Conta Azul partial failure created an orphaned sale and the operator manually cancelled or verified it, record that cleanup before retrying:
+
+```powershell
+npm run dev -- --operator --live "reconhecer limpeza de venda orfa no Conta Azul" --params '{ "operationId": "op_ack_cleanup", "previousOperationId": "op_partial_first", "orphanedSaleId": "sale_uuid", "cleanupAction": "cancelled" }' --approval "APROVAR op_ack_cleanup"
+```
+
+Valid `cleanupAction` values are `cancelled` and `verified_not_created`. The acknowledgement reads the ledger, verifies the failed operation and sale id, writes a succeeded cleanup receipt, and only then allows a later retry with the same `idempotencyKey`.
 
 Asaas boleto workflow by customer name:
 

@@ -18,7 +18,8 @@ const SECRET_KEY_PATTERN =
 const EMAIL_KEY_PATTERN = /(^|[_-])e?mail([_-]|$)|email/i;
 const PHONE_KEY_PATTERN = /(phone|telefone|celular|whatsapp|mobile)/i;
 const DOCUMENT_KEY_PATTERN = /(cpf|cnpj|document|legalDocument|naturalDocument)/i;
-const PRESERVE_KEY_PATTERN = /^(operationId|duplicateOperationId|idempotencyKey|sha256|timestamp)$/;
+const PRESERVE_KEY_PATTERN =
+  /^(operationId|previousOperationId|cleanupForOperationId|duplicateOperationId|idempotencyKey|saleId|orphanedSaleId|sha256|timestamp)$/;
 
 export function redactHeaders(headers: Record<string, unknown>): Record<string, unknown> {
   const output: Record<string, unknown> = {};

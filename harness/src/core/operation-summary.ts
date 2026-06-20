@@ -13,6 +13,8 @@ export type OperationSummary = {
   summary?: string;
   idempotencyKey?: string;
   duplicateOperationId?: string;
+  orphanedSaleId?: string;
+  failedStep?: string;
   saleNumber?: number | string;
   chargeUrl?: string;
   customerName?: string;
@@ -60,6 +62,8 @@ export async function summarizeOperationById(input: {
     summary: stringValue(summary?.summary),
     idempotencyKey: stringValue(summary?.idempotencyKey),
     duplicateOperationId: stringValue(summary?.duplicateOperationId),
+    orphanedSaleId: stringValue(summary?.orphanedSaleId),
+    failedStep: stringValue(summary?.failedStep),
     saleNumber: stringOrNumber(summary?.saleNumber),
     chargeUrl: stringValue(summary?.chargeUrl),
     customerName: stringValue(summary?.customerName),
@@ -89,6 +93,8 @@ export function formatOperationSummary(summary: OperationSummary): string {
   if (summary.unitValue !== undefined) lines.push(`Valor: ${summary.unitValue}`);
   if (summary.dueDateIso) lines.push(`Vencimento: ${summary.dueDateIso}`);
   if (summary.chargeUrl) lines.push(`Fatura: ${summary.chargeUrl}`);
+  if (summary.orphanedSaleId) lines.push(`Venda orfa: ${summary.orphanedSaleId}`);
+  if (summary.failedStep) lines.push(`Etapa com falha: ${summary.failedStep}`);
   if (summary.duplicateOperationId) {
     lines.push(`Duplicata de: ${summary.duplicateOperationId}`);
   }

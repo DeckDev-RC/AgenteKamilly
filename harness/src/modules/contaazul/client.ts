@@ -477,7 +477,10 @@ export class MappedContaAzulSessionClient implements ContaAzulMutationClient {
       headers: proReadHeaders(params.authToken)
     });
     assertNotExpired(response);
-    return response.ok;
+    if (!response.ok) {
+      throw new Error(`Conta Azul Pro session health check failed with HTTP ${response.status}.`);
+    }
+    return true;
   }
 
   private maisHeaders(): Record<string, string> {

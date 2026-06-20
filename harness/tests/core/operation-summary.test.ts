@@ -76,6 +76,34 @@ describe("operation summary", () => {
       warnings: ["duplicate"]
     });
   });
+
+  it("summarizes partial failures with orphaned sale details", async () => {
+    const ledgerPath = await tempLedgerPath();
+    await appendLedgerEntry(ledgerPath, {
+      operationId: "op_partial",
+      provider: "contaazul",
+      toolName: "contaazul.create_service_sale_and_issue_boleto",
+      status: "failed",
+      responseSummary: {
+        summary: "sale created but failed later",
+        idempotencyKey: "idem_1",
+        orphanedSaleId: "sale_uuid",
+        failedStep: "poll_financial_event"
+      },
+      artifacts: [],
+      warnings: ["manual cleanup required"]
+    });
+
+    const summary = await summarizeOperationById({ ledgerPath, operationId: "op_partial" });
+
+    expect(summary).toMatchObject({
+      latestStatus: "failed",
+      orphanedSaleId: "sale_uuid",
+      failedStep: "poll_financial_event"
+    });
+    expect(formatOperationSummary(summary)).toContain("Venda orfa: sale_uuid");
+    expect(formatOperationSummary(summary)).toContain("Etapa com falha: poll_financial_event");
+  });
 });
 
 async function tempLedgerPath(): Promise<string> {

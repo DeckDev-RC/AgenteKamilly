@@ -28,6 +28,7 @@ const SWITCH_TO_PRO_SESSION_TOOL = "contaazul.switch_to_pro_session";
 const SEARCH_FINANCIAL_STATEMENT_TOOL = "contaazul.search_financial_statement";
 const UPDATE_DUE_DATE_REISSUE_BOLETO_TOOL = "contaazul.update_due_date_reissue_boleto";
 const CREATE_CUSTOMER_TOOL = "contaazul.create_customer";
+const ACKNOWLEDGE_ORPHAN_CLEANUP_TOOL = "contaazul.acknowledge_orphan_cleanup";
 const CREATE_SERVICE_SALE_AND_ISSUE_BOLETO_TOOL =
   "contaazul.create_service_sale_and_issue_boleto";
 const CREATE_SERVICE_SALE_BOLETO_WORKFLOW_TOOL =
@@ -100,6 +101,13 @@ export const ContaAzulCreateCustomerParamsSchema = ApprovalFieldsSchema.extend({
   })
 });
 
+export const ContaAzulAcknowledgeOrphanCleanupParamsSchema = ApprovalFieldsSchema.extend({
+  previousOperationId: z.string().min(1),
+  orphanedSaleId: z.string().min(1),
+  cleanupAction: z.enum(["cancelled", "verified_not_created"]),
+  notes: z.string().optional()
+});
+
 export const ContaAzulCreateServiceSaleAndIssueBoletoParamsSchema = ApprovalFieldsSchema.extend({
   relationId: z.string().min(1),
   customerId: z.string().min(1),
@@ -169,6 +177,9 @@ export type ContaAzulUpdateDueDateReissueBoletoParams = z.input<
   typeof ContaAzulUpdateDueDateReissueBoletoParamsSchema
 >;
 export type ContaAzulCreateCustomerParams = z.input<typeof ContaAzulCreateCustomerParamsSchema>;
+export type ContaAzulAcknowledgeOrphanCleanupParams = z.input<
+  typeof ContaAzulAcknowledgeOrphanCleanupParamsSchema
+>;
 export type ContaAzulCreateServiceSaleAndIssueBoletoParams = z.input<
   typeof ContaAzulCreateServiceSaleAndIssueBoletoParamsSchema
 >;
@@ -219,6 +230,9 @@ export type ContaAzulMutationTools = {
   ): Promise<ToolReceipt<ContaAzulMutationPlan>>;
   createCustomer(
     params: ContaAzulCreateCustomerParams
+  ): Promise<ToolReceipt<ContaAzulMutationPlan>>;
+  acknowledgeOrphanCleanup(
+    params: ContaAzulAcknowledgeOrphanCleanupParams
   ): Promise<ToolReceipt<ContaAzulMutationPlan>>;
   createServiceSaleAndIssueBoleto(
     params: ContaAzulCreateServiceSaleAndIssueBoletoParams
@@ -581,6 +595,121 @@ export function createContaAzulMutationTools(
       });
     },
 
+    async acknowledgeOrphanCleanup(rawParams) {
+      const params = ContaAzulAcknowledgeOrphanCleanupParamsSchema.parse(rawParams);
+      const operationId =
+        params.operationId ?? createOperationId(ACKNOWLEDGE_ORPHAN_CLEANUP_TOOL);
+      const orphanedFailure = await findOrphanedServiceSaleFailure({
+        ledgerPath: options.ledgerPath,
+        operationId: params.previousOperationId,
+        orphanedSaleId: params.orphanedSaleId
+      });
+      const cleanupResult = {
+        cleanupForOperationId: params.previousOperationId,
+        orphanedSaleId: params.orphanedSaleId,
+        cleanupAction: params.cleanupAction,
+        idempotencyKey: orphanedFailure?.idempotencyKey,
+        notes: params.notes
+      };
+      const approvalPreview: ApprovalPreview = {
+        operationId,
+        provider: "contaazul",
+        toolName: ACKNOWLEDGE_ORPHAN_CLEANUP_TOOL,
+        action: "update",
+        target: { saleId: params.orphanedSaleId },
+        changes: [
+          { field: "cleanupForOperationId", to: params.previousOperationId },
+          { field: "cleanupAction", to: params.cleanupAction }
+        ],
+        irreversible: false,
+        rollbackNote:
+          "Este acknowledgement libera uma nova tentativa para a mesma idempotencyKey; registre outro evento corretivo se ele estiver incorreto."
+      };
+      const data: ContaAzulMutationPlan = {
+        approvalPreview,
+        plannedRequests: [],
+        idempotencyKey: orphanedFailure?.idempotencyKey,
+        result: cleanupResult
+      };
+
+      if (!orphanedFailure) {
+        const warning =
+          "Nenhuma falha parcial Conta Azul compativel foi encontrada para este operationId e saleId.";
+        return writeMutationReceipt({
+          ledgerPath: options.ledgerPath,
+          operationId,
+          runtimeMode,
+          toolName: ACKNOWLEDGE_ORPHAN_CLEANUP_TOOL,
+          status: "blocked",
+          summary: warning,
+          args: params,
+          data,
+          warnings: [warning],
+          responseSummary: {
+            summary: warning,
+            cleanupForOperationId: params.previousOperationId,
+            orphanedSaleId: params.orphanedSaleId,
+            cleanupAction: params.cleanupAction
+          }
+        });
+      }
+
+      if (runtimeMode === "dry-run") {
+        return writeMutationReceipt({
+          ledgerPath: options.ledgerPath,
+          operationId,
+          runtimeMode,
+          toolName: ACKNOWLEDGE_ORPHAN_CLEANUP_TOOL,
+          status: "planned",
+          summary:
+            "Acknowledgement de limpeza de venda orfa planejado; nenhuma liberacao de retry registrada.",
+          args: params,
+          data,
+          responseSummary: {
+            summary:
+              "Acknowledgement de limpeza de venda orfa planejado; nenhuma liberacao de retry registrada.",
+            cleanupForOperationId: params.previousOperationId,
+            orphanedSaleId: params.orphanedSaleId,
+            cleanupAction: params.cleanupAction,
+            idempotencyKey: orphanedFailure.idempotencyKey
+          }
+        });
+      }
+
+      const blocked = await blockIfNotApproved({
+        ledgerPath: options.ledgerPath,
+        operationId,
+        runtimeMode,
+        allowLiveMutations,
+        toolName: ACKNOWLEDGE_ORPHAN_CLEANUP_TOOL,
+        args: params,
+        data,
+        approvalText: params.approvalText
+      });
+      if (blocked) return blocked;
+
+      const summary =
+        `Limpeza manual da venda orfa ${params.orphanedSaleId} reconhecida para ${params.previousOperationId}. ` +
+        "Uma nova tentativa com a mesma idempotencyKey pode prosseguir.";
+      return writeMutationReceipt({
+        ledgerPath: options.ledgerPath,
+        operationId,
+        runtimeMode,
+        toolName: ACKNOWLEDGE_ORPHAN_CLEANUP_TOOL,
+        status: "succeeded",
+        summary,
+        args: params,
+        data,
+        responseSummary: {
+          summary,
+          cleanupForOperationId: params.previousOperationId,
+          orphanedSaleId: params.orphanedSaleId,
+          cleanupAction: params.cleanupAction,
+          idempotencyKey: orphanedFailure.idempotencyKey
+        }
+      });
+    },
+
     async createServiceSaleBoletoWorkflow(rawParams) {
       const params = ContaAzulCreateServiceSaleBoletoWorkflowParamsSchema.parse(rawParams);
       const operationId =
@@ -735,15 +864,21 @@ export function createContaAzulMutationTools(
         idempotencyKey
       };
 
-      const duplicate = await findSucceededServiceSaleDuplicate({
+      const duplicate = await findBlockingServiceSaleDuplicate({
         ledgerPath: options.ledgerPath,
         operationId,
         idempotencyKey
       });
       if (duplicate) {
-        const warning =
-          `Operacao similar ja concluida no Conta Azul: ${duplicate.operationId}. ` +
-          "Nenhuma nova venda ou boleto foi criado.";
+        const duplicateSummary = asRecord(duplicate.responseSummary);
+        const duplicateOrphanedSaleId = stringValue(duplicateSummary?.orphanedSaleId);
+        const duplicateFailedStep = stringValue(duplicateSummary?.failedStep);
+        const warning = duplicateOrphanedSaleId
+          ? `Operacao similar ja criou uma venda no Conta Azul, mas falhou antes de concluir: ${duplicate.operationId} ` +
+            `(saleId=${duplicateOrphanedSaleId}${duplicateFailedStep ? `, etapa=${duplicateFailedStep}` : ""}). ` +
+            "Nenhuma nova venda ou boleto foi criado. Verifique e cancele a venda manualmente se necessario antes de tentar novamente."
+          : `Operacao similar ja concluida no Conta Azul: ${duplicate.operationId}. ` +
+            "Nenhuma nova venda ou boleto foi criado.";
         return writeMutationReceipt({
           ledgerPath: options.ledgerPath,
           operationId,
@@ -758,7 +893,9 @@ export function createContaAzulMutationTools(
           responseSummary: {
             summary: warning,
             idempotencyKey,
-            duplicateOperationId: duplicate.operationId
+            duplicateOperationId: duplicate.operationId,
+            orphanedSaleId: duplicateOrphanedSaleId,
+            failedStep: duplicateFailedStep
           }
         });
       }
@@ -831,7 +968,27 @@ export function createContaAzulMutationTools(
       if (options.client.verifyProSession) {
         try {
           const ok = await options.client.verifyProSession({ authToken });
-          if (!ok) throw new ContaAzulSessionExpiredError();
+          if (!ok) {
+            const warning =
+              "Conta Azul Pro session health check failed before creating sale.";
+            return writeMutationReceipt({
+              ledgerPath: options.ledgerPath,
+              operationId,
+              runtimeMode,
+              toolName: CREATE_SERVICE_SALE_AND_ISSUE_BOLETO_TOOL,
+              status: "failed",
+              summary: warning,
+              args: params,
+              data,
+              artifacts: [pdfArtifact],
+              warnings: [warning],
+              responseSummary: {
+                summary: warning,
+                idempotencyKey,
+                failedStep: "verify_pro_session"
+              }
+            });
+          }
         } catch (error) {
           if (error instanceof ContaAzulSessionExpiredError) {
             const warning = `${error.message} Recapture session with ${error.recaptureCommand}.`;
@@ -848,7 +1005,26 @@ export function createContaAzulMutationTools(
               warnings: [warning]
             });
           }
-          throw error;
+          const detail = error instanceof Error ? error.message : "unknown error";
+          const warning =
+            `Conta Azul Pro session health check failed before creating sale: ${detail}`;
+          return writeMutationReceipt({
+            ledgerPath: options.ledgerPath,
+            operationId,
+            runtimeMode,
+            toolName: CREATE_SERVICE_SALE_AND_ISSUE_BOLETO_TOOL,
+            status: "failed",
+            summary: warning,
+            args: params,
+            data,
+            artifacts: [pdfArtifact],
+            warnings: [warning],
+            responseSummary: {
+              summary: warning,
+              idempotencyKey,
+              failedStep: "verify_pro_session"
+            }
+          });
         }
       }
 
@@ -1348,31 +1524,94 @@ function createServiceSaleWorkflowIdempotencyKey(
     .digest("hex")}`;
 }
 
-async function findSucceededServiceSaleDuplicate(input: {
+async function findBlockingServiceSaleDuplicate(input: {
   ledgerPath: string;
   operationId: string;
   idempotencyKey: string;
 }): Promise<LedgerEntry | undefined> {
   const entries = await safeReadLedgerEntries(input.ledgerPath);
-  return entries
-    .slice()
-    .reverse()
-    .find((entry) => {
-      if (entry.provider !== "contaazul") return false;
-      if (entry.status !== "succeeded") return false;
-      if (
-        entry.toolName !== CREATE_SERVICE_SALE_AND_ISSUE_BOLETO_TOOL &&
-        entry.toolName !== CREATE_SERVICE_SALE_BOLETO_WORKFLOW_TOOL
-      ) {
-        return false;
-      }
+  for (let index = entries.length - 1; index >= 0; index--) {
+    const entry = entries[index]!;
+    if (entry.provider !== "contaazul") continue;
+    if (!isServiceSaleMutationTool(entry.toolName)) continue;
 
-      const summary = asRecord(entry.responseSummary);
-      return (
-        entry.operationId === input.operationId ||
-        stringValue(summary?.idempotencyKey) === input.idempotencyKey
-      );
-    });
+    const summary = asRecord(entry.responseSummary);
+    const matches =
+      entry.operationId === input.operationId ||
+      stringValue(summary?.idempotencyKey) === input.idempotencyKey;
+    if (!matches) continue;
+
+    if (entry.status === "succeeded") return entry;
+
+    const orphanedSaleId = stringValue(summary?.orphanedSaleId);
+    if (!orphanedSaleId || entry.status !== "failed") continue;
+
+    const idempotencyKey = stringValue(summary?.idempotencyKey) ?? input.idempotencyKey;
+    if (
+      !hasLaterOrphanCleanupAcknowledgement(entries, index, {
+        cleanupForOperationId: entry.operationId,
+        orphanedSaleId,
+        idempotencyKey
+      })
+    ) {
+      return entry;
+    }
+  }
+  return undefined;
+}
+
+async function findOrphanedServiceSaleFailure(input: {
+  ledgerPath: string;
+  operationId: string;
+  orphanedSaleId: string;
+}): Promise<{ entry: LedgerEntry; idempotencyKey: string } | undefined> {
+  const entries = await safeReadLedgerEntries(input.ledgerPath);
+  for (let index = entries.length - 1; index >= 0; index--) {
+    const entry = entries[index]!;
+    if (entry.provider !== "contaazul") continue;
+    if (!isServiceSaleMutationTool(entry.toolName)) continue;
+    if (entry.status !== "failed") continue;
+    if (entry.operationId !== input.operationId) continue;
+
+    const summary = asRecord(entry.responseSummary);
+    if (stringValue(summary?.orphanedSaleId) !== input.orphanedSaleId) continue;
+
+    const idempotencyKey = stringValue(summary?.idempotencyKey);
+    if (!idempotencyKey) return undefined;
+
+    return { entry, idempotencyKey };
+  }
+  return undefined;
+}
+
+function hasLaterOrphanCleanupAcknowledgement(
+  entries: LedgerEntry[],
+  failedEntryIndex: number,
+  input: {
+    cleanupForOperationId: string;
+    orphanedSaleId: string;
+    idempotencyKey: string;
+  }
+): boolean {
+  return entries.slice(failedEntryIndex + 1).some((entry) => {
+    if (entry.provider !== "contaazul") return false;
+    if (entry.toolName !== ACKNOWLEDGE_ORPHAN_CLEANUP_TOOL) return false;
+    if (entry.status !== "succeeded") return false;
+
+    const summary = asRecord(entry.responseSummary);
+    return (
+      stringValue(summary?.cleanupForOperationId) === input.cleanupForOperationId &&
+      stringValue(summary?.orphanedSaleId) === input.orphanedSaleId &&
+      stringValue(summary?.idempotencyKey) === input.idempotencyKey
+    );
+  });
+}
+
+function isServiceSaleMutationTool(toolName: string): boolean {
+  return (
+    toolName === CREATE_SERVICE_SALE_AND_ISSUE_BOLETO_TOOL ||
+    toolName === CREATE_SERVICE_SALE_BOLETO_WORKFLOW_TOOL
+  );
 }
 
 async function safeReadLedgerEntries(ledgerPath: string): Promise<LedgerEntry[]> {

@@ -151,6 +151,21 @@ describe("MappedContaAzulSessionClient", () => {
     );
   });
 
+  it("throws a technical error when Pro session verification receives a non-auth HTTP failure", async () => {
+    const requests: Array<{ url: string; options: RequestInit }> = [];
+    const client = new MappedContaAzulSessionClient({
+      state,
+      request: fakeRequestSequence(requests, [textResponse("temporary failure", 500, "")])
+    });
+
+    await expect(client.verifyProSession({ authToken: "pro-token-test" })).rejects.toThrow(
+      "Conta Azul Pro session health check failed with HTTP 500."
+    );
+    expect(requests[0]?.url).toBe(
+      "https://services.contaazul.com/app/v1/negotiations/next-number"
+    );
+  });
+
   it("resolves sale setup data through mapped read endpoints", async () => {
     const requests: Array<{ url: string; options: RequestInit }> = [];
     const client = new MappedContaAzulSessionClient({

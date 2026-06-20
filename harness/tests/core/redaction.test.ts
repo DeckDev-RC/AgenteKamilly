@@ -58,6 +58,10 @@ describe("redaction", () => {
   it("preserves audit identifiers containing long numeric runs", () => {
     const redacted = redact({
       operationId: "op_controlled_contaazul_sale_20260619201113142",
+      previousOperationId: "op_partial_contaazul_sale_20260619201113142",
+      cleanupForOperationId: "op_partial_contaazul_sale_20260619201113142",
+      saleId: "sale_62-99151-4384",
+      orphanedSaleId: "sale_62-99151-4384",
       approvalText: "APROVAR op_contaazul_sale_1781903486089_6092b931",
       idempotencyKey: "contaazul-sale-boleto:8614c01bfda7d75296250df7fa29d4c5",
       sha256: "705b153b3c3412fce97947f3d9897227fde489be37000a4812ab535f799a15c7"
@@ -65,6 +69,10 @@ describe("redaction", () => {
 
     expect(redacted).toEqual({
       operationId: "op_controlled_contaazul_sale_20260619201113142",
+      previousOperationId: "op_partial_contaazul_sale_20260619201113142",
+      cleanupForOperationId: "op_partial_contaazul_sale_20260619201113142",
+      saleId: "sale_62-99151-4384",
+      orphanedSaleId: "sale_62-99151-4384",
       approvalText: "APROVAR op_contaazul_sale_1781903486089_6092b931",
       idempotencyKey: "contaazul-sale-boleto:8614c01bfda7d75296250df7fa29d4c5",
       sha256: "705b153b3c3412fce97947f3d9897227fde489be37000a4812ab535f799a15c7"
