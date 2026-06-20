@@ -1,7 +1,11 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 
+import { config as loadDotenv } from "dotenv";
+import { planAgentTurn } from "./agent/llm-planner.js";
+import { createAgentModelProvider } from "./agent/model-provider-factory.js";
 import { planOrchestratorTurn, registerHarnessTools } from "./agent/orchestrator.js";
+import { parseCliArgs, type CliArgs } from "./cli-args.js";
 import { loadHarnessConfig } from "./core/config.js";
 import {
   formatOperationSummary,
@@ -21,88 +25,12 @@ import {
 } from "./modules/contaazul/tools.js";
 import { createContaAzulWorkflowTools } from "./modules/contaazul/workflows.js";
 
-type CliArgs = {
-  request: string;
-  runtimeModeOverride?: "dry-run" | "live";
-  params?: Record<string, unknown>;
-  approvalText?: string;
-  outputMode?: "json" | "operator";
-  summaryOperationId?: string;
-  verbose?: boolean;
-};
-
-export function parseCliArgs(argv: string[]): CliArgs {
-  const requestParts: string[] = [];
-  let runtimeModeOverride: "dry-run" | "live" = "dry-run";
-  let params: Record<string, unknown> | undefined;
-  let approvalText: string | undefined;
-  let outputMode: "json" | "operator" | undefined;
-  let summaryOperationId: string | undefined;
-  let verbose = false;
-
-  for (let index = 0; index < argv.length; index++) {
-    const arg = argv[index];
-    if (arg === "--live") {
-      runtimeModeOverride = "live";
-      continue;
-    }
-    if (arg === "--dry-run") {
-      runtimeModeOverride = "dry-run";
-      continue;
-    }
-    if (arg === "--params") {
-      const raw = argv[++index];
-      params = raw ? parseJsonObject(raw, "--params") : undefined;
-      continue;
-    }
-    if (arg === "--approval") {
-      approvalText = argv[++index];
-      continue;
-    }
-    if (arg === "--summary") {
-      summaryOperationId = argv[++index];
-      if (!summaryOperationId) throw new Error("Missing value for --summary");
-      continue;
-    }
-    if (arg === "--json") {
-      outputMode = "json";
-      continue;
-    }
-    if (arg === "--operator") {
-      outputMode = "operator";
-      continue;
-    }
-    if (arg === "--output") {
-      const raw = argv[++index];
-      if (raw !== "json" && raw !== "operator") {
-        throw new Error("--output must be json or operator.");
-      }
-      outputMode = raw;
-      continue;
-    }
-    if (arg === "--verbose") {
-      verbose = true;
-      continue;
-    }
-    requestParts.push(arg);
-  }
-
-  return {
-    request: requestParts.join(" ").trim(),
-    runtimeModeOverride,
-    params,
-    approvalText,
-    outputMode,
-    summaryOperationId,
-    verbose
-  };
-}
-
 async function main(): Promise<void> {
   const args = parseCliArgs(process.argv.slice(2));
   const configCwd = path.basename(process.cwd()).toLowerCase() === "harness"
     ? path.resolve(process.cwd(), "..")
     : process.cwd();
+  loadDotenv({ path: path.resolve(configCwd, ".env"), override: false, quiet: true });
   const config = loadHarnessConfig(
     {
       ...process.env,
@@ -121,8 +49,50 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (args.modelSmoke) {
+    const provider = createAgentModelProvider(config);
+    const response = await provider.generateText({
+      messages: [
+        {
+          role: "user",
+          content: 'Responda apenas JSON valido: {"ok":true}'
+        }
+      ]
+    });
+    printOutput(
+      {
+        status: "model-smoke-ok",
+        provider: response.provider,
+        model: response.model,
+        response: response.text
+      },
+      args.outputMode ?? "json",
+      formatModelSmokeOutput
+    );
+    return;
+  }
+
   const warnings: string[] = [];
   const registry = await createDefaultMappedToolRegistry(config, warnings);
+  if (args.agentMode) {
+    const provider = createAgentModelProvider(config);
+    const result = await planAgentTurn({
+      request: args.request,
+      registry,
+      provider
+    });
+    const output = {
+      request: args.request,
+      runtimeMode: config.runtimeMode,
+      allowLiveMutations: config.allowLiveMutations,
+      status: "agent-planner-ready",
+      warnings,
+      result
+    };
+    printOutput(output, args.outputMode ?? "json", formatAgentTurnOutput);
+    return;
+  }
+
   const result = await planOrchestratorTurn({
     request: args.request,
     registry,
@@ -220,14 +190,6 @@ async function createDefaultMappedToolRegistry(
   return registry;
 }
 
-function parseJsonObject(raw: string, flag: string): Record<string, unknown> {
-  const parsed = JSON.parse(raw) as unknown;
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error(`${flag} must be a JSON object.`);
-  }
-  return parsed as Record<string, unknown>;
-}
-
 function printOutput<T>(
   value: T,
   mode: "json" | "operator",
@@ -238,6 +200,67 @@ function printOutput<T>(
     return;
   }
   console.log(formatter(value));
+}
+
+function formatModelSmokeOutput(output: {
+  status: string;
+  provider: string;
+  model: string;
+  response: string;
+}): string {
+  return [
+    `Status: ${output.status}`,
+    `Provider: ${output.provider}`,
+    `Modelo: ${output.model}`,
+    `Resposta: ${output.response}`
+  ].join("\n");
+}
+
+function formatAgentTurnOutput(output: {
+  request: string;
+  runtimeMode: string;
+  allowLiveMutations: boolean;
+  status: string;
+  warnings: string[];
+  result: Awaited<ReturnType<typeof planAgentTurn>>;
+}): string {
+  const lines = [
+    `Status: ${output.result.status}`,
+    `Modo: ${output.runtimeMode}`,
+    `Live habilitado: ${output.allowLiveMutations ? "sim" : "nao"}`
+  ];
+
+  if (output.warnings.length > 0) {
+    lines.push("Warnings:");
+    for (const warning of output.warnings) lines.push(`- ${warning}`);
+  }
+
+  if (output.result.status === "blocked") {
+    lines.push(`Motivo: ${output.result.reason}`);
+    return lines.join("\n");
+  }
+
+  lines.push(`Provider IA: ${output.result.provider}`);
+  lines.push(`Modelo: ${output.result.model}`);
+
+  if (output.result.status === "needs_input") {
+    lines.push(`Tool: ${output.result.toolName}`);
+    lines.push(`Risco: ${output.result.risk}`);
+    lines.push(`Confianca: ${output.result.confidence}`);
+    lines.push("Campos faltantes:");
+    for (const field of output.result.missingFields) lines.push(`- ${field}`);
+    lines.push("Perguntas:");
+    for (const question of output.result.questions) lines.push(`- ${question}`);
+    return lines.join("\n");
+  }
+
+  lines.push(`Tool: ${output.result.plan.toolName}`);
+  lines.push(`Intent: ${output.result.plan.intent}`);
+  lines.push(`Risco: ${output.result.plan.risk}`);
+  lines.push(`Confianca: ${output.result.plan.confidence}`);
+  lines.push(`Motivo: ${output.result.plan.reason}`);
+  lines.push("Execucao: nenhuma; plano dry-run aguardando roteador/workflow seguro.");
+  return lines.join("\n");
 }
 
 function formatOperatorTurnOutput(output: {

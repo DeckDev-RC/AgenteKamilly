@@ -1,0 +1,244 @@
+import { z } from "zod";
+
+import type { ToolRegistry } from "../core/tool-registry.js";
+import type { ModelProvider } from "./model-provider.js";
+
+const RiskSchema = z.preprocess((value) => {
+  if (typeof value !== "string") return value;
+  const normalized = normalize(value);
+  if (normalized === "baixo" || normalized === "baixa") return "low";
+  if (normalized === "medio" || normalized === "media" || normalized === "moderado") {
+    return "medium";
+  }
+  if (normalized === "alto" || normalized === "alta") return "high";
+  return value;
+}, z.enum(["low", "medium", "high"]));
+
+const AgentPlanSchema = z.object({
+  intent: z.string().min(1),
+  toolName: z.string().min(1),
+  params: z.record(z.string(), z.unknown()).default({}),
+  missingFields: z.array(z.string()).default([]),
+  questions: z.array(z.string()).default([]),
+  risk: RiskSchema,
+  confidence: z.number().min(0).max(1),
+  reason: z.string().min(1)
+});
+
+export type AgentPlan = z.output<typeof AgentPlanSchema>;
+
+export type AgentTurnInput = {
+  request: string;
+  registry: ToolRegistry;
+  provider: ModelProvider;
+};
+
+export type AgentTurnResult =
+  | {
+      status: "planned";
+      provider: "gemini";
+      model: string;
+      plan: AgentPlan;
+    }
+  | {
+      status: "needs_input";
+      provider: "gemini";
+      model: string;
+      intent: string;
+      toolName: string;
+      params: Record<string, unknown>;
+      missingFields: string[];
+      questions: string[];
+      risk: "low" | "medium" | "high";
+      confidence: number;
+      reason: string;
+    }
+  | {
+      status: "blocked";
+      reason: string;
+      toolName?: string;
+    };
+
+export async function planAgentTurn(input: AgentTurnInput): Promise<AgentTurnResult> {
+  if (mentionsForbiddenOfficialIntegration(input.request)) {
+    return {
+      status: "blocked",
+      reason:
+        "Request blocked: official provider APIs, OAuth, webhooks, and provider MCPs are outside this harness boundary."
+    };
+  }
+
+  const modelResponse = await input.provider.generateText({
+    messages: [
+      { role: "system", content: buildSystemPrompt(input.registry) },
+      { role: "user", content: input.request }
+    ]
+  });
+
+  const parsedJson = parseModelJson(modelResponse.text);
+  if (!parsedJson.ok) {
+    return {
+      status: "blocked",
+      reason: "Model response must be valid JSON matching the agent plan schema."
+    };
+  }
+
+  const parsedPlan = AgentPlanSchema.safeParse(parsedJson.value);
+  if (!parsedPlan.success) {
+    return {
+      status: "blocked",
+      reason: `Model response did not match the agent plan schema: ${parsedPlan.error.issues[0]?.message ?? "invalid plan"}`
+    };
+  }
+
+  const plan = normalizePlanAliases(parsedPlan.data);
+  const tool = input.registry.list().find((definition) => definition.name === plan.toolName);
+  if (!tool) {
+    return {
+      status: "blocked",
+      toolName: plan.toolName,
+      reason: `Model-selected tool is not registered: ${plan.toolName}`
+    };
+  }
+
+  if (plan.missingFields.length > 0) {
+    return {
+      status: "needs_input",
+      provider: modelResponse.provider,
+      model: modelResponse.model,
+      intent: plan.intent,
+      toolName: plan.toolName,
+      params: plan.params,
+      missingFields: plan.missingFields,
+      questions: plan.questions,
+      risk: plan.risk,
+      confidence: plan.confidence,
+      reason: plan.reason
+    };
+  }
+
+  const parsedParams = tool.parameters.safeParse(plan.params);
+  if (!parsedParams.success) {
+    return {
+      status: "blocked",
+      toolName: plan.toolName,
+      reason: `Model-selected params failed tool validation: ${parsedParams.error.issues[0]?.message ?? "invalid params"}`
+    };
+  }
+
+  return {
+    status: "planned",
+    provider: modelResponse.provider,
+    model: modelResponse.model,
+    plan: {
+      ...plan,
+      params: parsedParams.data as Record<string, unknown>
+    }
+  };
+}
+
+function buildSystemPrompt(registry: ToolRegistry): string {
+  const tools = registry.list().map((tool) => ({
+    name: tool.name,
+    description: tool.description
+  }));
+
+  return [
+    "Voce e o planner dry-run do harness Kamilly.",
+    "Nunca execute operacoes. Escolha apenas uma ferramenta registrada e produza JSON puro.",
+    "APIs oficiais, OAuth, webhooks oficiais e MCPs oficiais de Asaas ou Conta Azul sao proibidos.",
+    "Se faltarem dados, preencha missingFields e faca apenas as perguntas necessarias.",
+    "Schema de saida: { intent, toolName, params, missingFields, questions, risk, confidence, reason }.",
+    `Ferramentas registradas: ${JSON.stringify(tools)}`
+  ].join("\n");
+}
+
+function normalizePlanAliases(plan: AgentPlan): AgentPlan {
+  return {
+    ...plan,
+    params: normalizeParamAliases(plan.toolName, plan.params),
+    missingFields: plan.missingFields.map((field) => normalizeFieldAlias(plan.toolName, field))
+  };
+}
+
+function normalizeParamAliases(
+  toolName: string,
+  params: Record<string, unknown>
+): Record<string, unknown> {
+  const normalized = { ...params };
+  for (const [source, value] of Object.entries(params)) {
+    const target = normalizeFieldAlias(toolName, source);
+    if (target !== source && normalized[target] === undefined) {
+      normalized[target] = value;
+    }
+  }
+  return normalized;
+}
+
+function normalizeFieldAlias(toolName: string, field: string): string {
+  const normalized = normalize(field);
+
+  if (toolName.startsWith("asaas.")) {
+    if (["value", "amount", "valor"].includes(normalized)) return "valueBr";
+    if (["duedate", "vencimento", "data vencimento"].includes(normalized)) return "dueDateBr";
+    if (["descricao", "description"].includes(normalized)) return "description";
+  }
+
+  if (toolName === "contaazul.create_service_sale_boleto_workflow") {
+    if (["value", "amount", "valor", "unitvalue", "valor unitario"].includes(normalized)) {
+      return "unitValueBr";
+    }
+    if (["duedate", "vencimento", "data vencimento"].includes(normalized)) return "dueDateBr";
+    if (["description", "descricao", "servicedescription"].includes(normalized)) {
+      return "serviceDescription";
+    }
+  }
+
+  if (toolName === "contaazul.create_service_sale_and_issue_boleto") {
+    if (["value", "amount", "valor", "unitvalue", "valor unitario"].includes(normalized)) {
+      return "unitValue";
+    }
+    if (["duedate", "vencimento", "data vencimento"].includes(normalized)) return "dueDateIso";
+    if (["description", "descricao", "servicedescription"].includes(normalized)) {
+      return "serviceDescription";
+    }
+  }
+
+  return field;
+}
+
+function parseModelJson(text: string): { ok: true; value: unknown } | { ok: false } {
+  const trimmed = text.trim();
+  const unfenced = trimmed
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .trim();
+  try {
+    return { ok: true, value: JSON.parse(unfenced) as unknown };
+  } catch {
+    return { ok: false };
+  }
+}
+
+function mentionsForbiddenOfficialIntegration(request: string): boolean {
+  const normalized = normalize(request);
+  return (
+    normalized.includes("oauth") ||
+    normalized.includes("asaas_mcp") ||
+    normalized.includes("contaazul_mcp") ||
+    normalized.includes("official") ||
+    (normalized.includes("oficial") &&
+      hasAny(normalized, ["api", "webhook", "mcp", "oauth"]))
+  );
+}
+
+function hasAny(request: string, terms: string[]): boolean {
+  return terms.some((term) => request.includes(normalize(term)));
+}
+
+function normalize(value: string): string {
+  return value
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "");
+}

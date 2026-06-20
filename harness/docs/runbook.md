@@ -35,6 +35,35 @@ npm run dev -- --json --summary op_contaazul_create_service_sale_boleto_workflow
 
 Use `--operator` for concise human-readable status. Use `--json` for full machine-readable output. Summary reads only the append-only ledger and does not call providers.
 
+## AI Agent Planner
+
+The optional agent planner uses a cloud model only to choose a registered workflow tool, extract params, and ask for missing fields. It never executes provider mutations directly. Low-level mapped HTTP tools are kept behind the harness registry and existing approval/idempotency gates.
+
+Minimum `.env` entries:
+
+```env
+GEMINI_API_KEY=...
+AGENT_MODEL_PROVIDER=gemini
+AGENT_MODEL_NAME=gemini-3-flash-preview
+AGENT_MODEL_MAX_RPM=4
+AGENT_MODEL_MAX_DAILY_REQUESTS=100
+AGENT_MODEL_MAX_INPUT_TPM=100000
+```
+
+Validate model access without loading provider sessions:
+
+```powershell
+npm run dev -- --model-smoke --json
+```
+
+Use the planner in dry-run mode:
+
+```powershell
+npm run dev -- --agent --operator "criar boleto no Asaas para Cliente Exemplo"
+```
+
+Expected result is either `needs_input`, `planned`, or `blocked`. A `planned` agent result is still not a provider execution; use the normal harness workflow command with params/approval to produce receipts and live operations.
+
 Conta Azul service-sale workflow by names:
 
 ```powershell
