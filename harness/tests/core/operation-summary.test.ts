@@ -1,4 +1,4 @@
-import { mkdtemp } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -135,6 +135,42 @@ describe("operation summary", () => {
       saleNumber: 926,
       warnings: ["demo warning"]
     });
+    expect(summaries[0].entries).toBeUndefined();
+  });
+
+  it("orders tied timestamps by latest ledger entry position", async () => {
+    const ledgerPath = await tempLedgerPath();
+    const timestamp = "2026-06-21T11:00:00.000Z";
+    const entries = [
+      {
+        operationId: "op_first",
+        provider: "asaas",
+        toolName: "asaas.create_boleto_charge_workflow",
+        status: "planned",
+        timestamp,
+        responseSummary: { summary: "first" },
+        artifacts: [],
+        warnings: []
+      },
+      {
+        operationId: "op_second",
+        provider: "contaazul",
+        toolName: "contaazul.create_service_sale_boleto_workflow",
+        status: "succeeded",
+        timestamp,
+        responseSummary: { summary: "second" },
+        artifacts: [],
+        warnings: []
+      }
+    ];
+    await mkdir(path.dirname(ledgerPath), { recursive: true });
+    await writeFile(ledgerPath, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+
+    const summaries = await listOperationSummaries({ ledgerPath });
+
+    expect(summaries.map((summary) => summary.operationId)).toEqual(["op_second", "op_first"]);
+    expect(summaries).toHaveLength(2);
+    expect(summaries.every((summary) => summary.entries === undefined)).toBe(true);
   });
 });
 

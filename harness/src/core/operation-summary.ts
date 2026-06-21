@@ -52,16 +52,31 @@ export async function listOperationSummaries(input: {
   limit?: number;
 }): Promise<OperationSummary[]> {
   const entries = await safeReadLedgerEntries(input.ledgerPath);
-  const byOperation = new Map<string, LedgerEntry[]>();
-  for (const entry of entries) {
-    const group = byOperation.get(entry.operationId) ?? [];
-    group.push(entry);
+  const byOperation = new Map<string, { entries: LedgerEntry[]; latestLedgerIndex: number }>();
+  for (const [ledgerIndex, entry] of entries.entries()) {
+    const group = byOperation.get(entry.operationId) ?? {
+      entries: [],
+      latestLedgerIndex: ledgerIndex
+    };
+    group.entries.push(entry);
+    group.latestLedgerIndex = ledgerIndex;
     byOperation.set(entry.operationId, group);
   }
 
   return Array.from(byOperation.entries())
-    .map(([operationId, groupedEntries]) => summaryFromEntries(operationId, groupedEntries, false))
-    .sort((a, b) => (b.latestTimestamp ?? "").localeCompare(a.latestTimestamp ?? ""))
+    .map(([operationId, group]) => ({
+      summary: summaryFromEntries(operationId, group.entries, false),
+      latestLedgerIndex: group.latestLedgerIndex
+    }))
+    .sort((a, b) => {
+      const timestampOrder = (b.summary.latestTimestamp ?? "").localeCompare(
+        a.summary.latestTimestamp ?? ""
+      );
+      return timestampOrder !== 0
+        ? timestampOrder
+        : b.latestLedgerIndex - a.latestLedgerIndex;
+    })
+    .map((entry) => entry.summary)
     .slice(0, input.limit ?? 50);
 }
 
