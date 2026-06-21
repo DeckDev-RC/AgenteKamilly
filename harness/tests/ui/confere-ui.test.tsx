@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { App } from "../../src/ui/App.js";
 import { ConfirmationSheet } from "../../src/ui/components/ConfirmationSheet.js";
+import { OperationsScreen } from "../../src/ui/screens/OperationsScreen.js";
 
 describe("Confere UI", () => {
   it("renders the product shell and module navigation", () => {
@@ -52,5 +53,18 @@ describe("Confere UI", () => {
     expect(html).toContain("Confirmar execução real");
     expect(html).toContain("Cliente Demonstração");
     expect(html).toContain("Aprovar execução real");
+  });
+
+  it("renders operations navigation language", () => {
+    const html = renderToString(<App />);
+
+    expect(html).toContain("Operações");
+  });
+
+  it("renders the operations history screen", () => {
+    const html = renderToString(<OperationsScreen />);
+
+    expect(html).toContain("Histórico auditável");
+    expect(html).toContain("Ledger redigido");
   });
 });

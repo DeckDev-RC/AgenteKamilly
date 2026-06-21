@@ -371,3 +371,37 @@ h1 {
   justify-content: flex-end;
   margin-top: 18px;
 }
+
+.operations-table {
+  background: #ffffff;
+  border: 1px solid #dce1e8;
+  border-radius: 8px;
+  display: grid;
+  overflow: hidden;
+}
+
+.operation-row {
+  align-items: center;
+  background: #ffffff;
+  border: 0;
+  border-bottom: 1px solid #eef2f7;
+  color: #233044;
+  cursor: pointer;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(220px, 1.2fr) 110px minmax(180px, 1fr) 190px;
+  min-height: 50px;
+  padding: 0 12px;
+  text-align: left;
+}
+
+.operation-row:hover {
+  background: #f6f8fb;
+}
+
+.artifact-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}

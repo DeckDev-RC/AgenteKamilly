@@ -3,6 +3,7 @@ import type { ReactElement } from "react";
 
 import { AppShell } from "./components/AppShell.js";
 import { HomeScreen } from "./screens/HomeScreen.js";
+import { OperationsScreen } from "./screens/OperationsScreen.js";
 import { SessionsScreen } from "./screens/SessionsScreen.js";
 import { WorkflowScreen } from "./screens/WorkflowScreen.js";
 import type { ScreenId } from "./types.js";
@@ -28,17 +29,7 @@ export function App(): ReactElement {
           description="Prepare cobrança e boleto pelo fluxo mapeado."
         />
       ) : null}
-      {screen === "operacoes" ? <Placeholder title="Operações" /> : null}
+      {screen === "operacoes" ? <OperationsScreen /> : null}
     </AppShell>
-  );
-}
-
-function Placeholder(props: { title: string }): ReactElement {
-  return (
-    <section className="screen">
-      <p className="eyebrow">Confere</p>
-      <h1>{props.title}</h1>
-      <p className="screen-lead">Fluxo operacional em preparação.</p>
-    </section>
   );
 }
