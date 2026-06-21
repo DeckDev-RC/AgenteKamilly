@@ -156,6 +156,99 @@ describe("agent runner", () => {
     expect(executed).toBe(false);
   });
 
+  it("executes a high-risk dry-run when the operator explicitly confirms", async () => {
+    const registry = createToolRegistry();
+    const calls: unknown[] = [];
+    registry.register({
+      name: "asaas.create_boleto_charge_workflow",
+      description: "Resolve customer and plan boleto creation.",
+      parameters: z.object({ customerName: z.string() }).strict(),
+      execute: async (params) => {
+        calls.push(params);
+        return receipt("asaas.create_boleto_charge_workflow");
+      }
+    });
+
+    const result = await runAgentTurn({
+      request: "criar boleto no Asaas",
+      registry,
+      provider: createFakeModelProvider({
+        intent: "create_boleto_charge_workflow",
+        toolName: "asaas.create_boleto_charge_workflow",
+        params: { customerName: "Cliente Exemplo" },
+        missingFields: [],
+        questions: [],
+        risk: "high",
+        confidence: 0.6,
+        reason: "Plano incerto."
+      }),
+      runtimeMode: "dry-run",
+      params: { operatorConfirmation: true }
+    });
+
+    expect(result).toMatchObject({
+      status: "executed",
+      receipt: {
+        status: "planned",
+        dryRun: true,
+        toolName: "asaas.create_boleto_charge_workflow"
+      }
+    });
+    expect(calls).toEqual([{ customerName: "Cliente Exemplo" }]);
+  });
+
+  it("accepts the CONFIRMAR AGENTE request token as operator confirmation", async () => {
+    const registry = createToolRegistry();
+    let executed = false;
+    const provider = createFakeModelProvider({
+      intent: "create_boleto_charge_workflow",
+      toolName: "asaas.create_boleto_charge_workflow",
+      params: { customerName: "Cliente Exemplo" },
+      missingFields: [],
+      questions: [],
+      risk: "high",
+      confidence: 0.6,
+      reason: "Plano incerto."
+    });
+    registry.register({
+      name: "asaas.create_boleto_charge_workflow",
+      description: "Resolve customer and plan boleto creation.",
+      parameters: z.object({ customerName: z.string() }),
+      execute: async () => {
+        executed = true;
+        return receipt("asaas.create_boleto_charge_workflow");
+      }
+    });
+
+    const result = await runAgentTurn({
+      request: "CONFIRMAR AGENTE criar boleto no Asaas",
+      registry,
+      provider,
+      runtimeMode: "dry-run"
+    });
+
+    expect(result.status).toBe("executed");
+    expect(executed).toBe(true);
+    expect(provider.calls[0]?.messages.at(-1)?.content).not.toContain("CONFIRMAR AGENTE");
+  });
+
+  it("blocks a bare CONFIRMAR AGENTE token before asking the model", async () => {
+    const provider = createFakeModelProvider({});
+
+    const result = await runAgentTurn({
+      request: "CONFIRMAR AGENTE",
+      registry: createToolRegistry(),
+      provider,
+      runtimeMode: "dry-run"
+    });
+
+    expect(result).toMatchObject({
+      status: "blocked",
+      reason: expect.stringContaining("pedido")
+    });
+    expect(provider.calls).toHaveLength(0);
+  });
+
   it("persists collected slots and reuses them on the next session turn", async () => {
     const sessionsDir = await mkdtemp(path.join(os.tmpdir(), "harness-agent-runner-"));
     const registry = createToolRegistry();

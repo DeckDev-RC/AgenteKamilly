@@ -34,24 +34,34 @@ export async function runAgentTurn(input: AgentRunInput): Promise<AgentRunResult
     };
   }
 
+  const agentControl = collectAgentControl(input);
+  if (!agentControl.request.trim()) {
+    return {
+      status: "blocked",
+      reason:
+        "Informe o pedido apos CONFIRMAR AGENTE ou envie um pedido completo para o agente."
+    };
+  }
+
   const safeRegistry = createSafeWorkflowRegistry(input.registry);
   const session = await loadOptionalSession(input);
   const knownParams = {
     ...(session?.slots ?? {}),
     ...(input.params ?? {})
   };
+  const workflowKnownParams = omitAgentControlParams(knownParams);
 
   const planned = await planAgentTurn({
-    request: input.request,
+    request: agentControl.request,
     registry: safeRegistry,
     provider: input.provider,
-    knownParams
+    knownParams: workflowKnownParams
   });
 
-  await persistSessionForResult(input, session, planned, knownParams);
+  await persistSessionForResult(input, session, planned, workflowKnownParams);
 
   if (planned.status !== "planned") return planned;
-  if (requiresOperatorConfirmation(planned.plan)) {
+  if (requiresOperatorConfirmation(planned.plan) && !agentControl.operatorConfirmed) {
     return {
       status: "needs_input",
       provider: planned.provider,
@@ -61,7 +71,7 @@ export async function runAgentTurn(input: AgentRunInput): Promise<AgentRunResult
       params: planned.plan.params,
       missingFields: ["operatorConfirmation"],
       questions: [
-        `Plano com risco ${planned.plan.risk} e confianca ${planned.plan.confidence}. Informe se devo confirmar o dry-run desta workflow.`
+        `Plano com risco ${planned.plan.risk} e confianca ${planned.plan.confidence}. Para confirmar este dry-run, reenvie o pedido com o prefixo CONFIRMAR AGENTE ou passe operatorConfirmation=true.`
       ],
       risk: planned.plan.risk,
       confidence: planned.plan.confidence,
@@ -121,4 +131,28 @@ function paramsFromResult(result: AgentRunResult): Record<string, unknown> {
 
 function requiresOperatorConfirmation(plan: AgentPlan): boolean {
   return plan.risk === "high" || plan.confidence < 0.7;
+}
+
+function collectAgentControl(input: AgentRunInput): { operatorConfirmed: boolean; request: string } {
+  const requestControl = extractOperatorConfirmationFromRequest(input.request);
+  return {
+    operatorConfirmed: input.params?.operatorConfirmation === true || requestControl.operatorConfirmed,
+    request: requestControl.request
+  };
+}
+
+function omitAgentControlParams(params: Record<string, unknown>): Record<string, unknown> {
+  const { operatorConfirmation: _operatorConfirmation, ...workflowParams } = params;
+  return workflowParams;
+}
+
+function extractOperatorConfirmationFromRequest(request: string): {
+  operatorConfirmed: boolean;
+  request: string;
+} {
+  const stripped = request.replace(/^\s*CONFIRMAR\s+AGENTE\b\s*:?/i, "").trim();
+  return {
+    operatorConfirmed: stripped !== request.trim(),
+    request: stripped
+  };
 }

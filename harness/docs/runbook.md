@@ -83,7 +83,14 @@ npm run dev -- --agent --session sess_boleto_001 --operator "valor 120,00, venci
 
 Expected result is `needs_input`, `executed`, or `blocked`. `executed` in agent mode means the selected workflow tool ran through the harness in `dry-run` and returned a planned receipt; it does not allow live provider mutations. Agent mode is intentionally blocked when runtime mode is `live`.
 
-High-risk or low-confidence model plans are converted to `needs_input` and require operator confirmation before even the dry-run workflow executes.
+High-risk or low-confidence model plans are converted to `needs_input` and require operator confirmation before even the dry-run workflow executes. To confirm the same request, either resend it with the `CONFIRMAR AGENTE` prefix or pass `operatorConfirmation=true` through `--params`:
+
+```powershell
+npm run dev -- --agent --operator "CONFIRMAR AGENTE criar boleto no Asaas para Cliente Exemplo"
+npm run dev -- --agent --operator "criar boleto no Asaas para Cliente Exemplo" --params '{ "operatorConfirmation": true }'
+```
+
+`CONFIRMAR AGENTE` by itself is rejected; include the full business request after the prefix.
 
 Only workflow-level tools are exposed to the model:
 
