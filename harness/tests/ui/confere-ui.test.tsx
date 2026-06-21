@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { App } from "../../src/ui/App.js";
 import { ConfirmationSheet } from "../../src/ui/components/ConfirmationSheet.js";
+import { PixelynAvatar } from "../../src/ui/components/PixelynAvatar.js";
 import { OperationsScreen } from "../../src/ui/screens/OperationsScreen.js";
 
 describe("Confere UI", () => {
@@ -72,5 +73,14 @@ describe("Confere UI", () => {
     const html = renderToString(<App />);
 
     expect(html).toContain("aprovação humana");
+  });
+
+  it("renders the Pixelyn avatar with a state label for accessibility", () => {
+    const happy = renderToString(<PixelynAvatar state="feito" />);
+    expect(happy).toContain("Pixelyn");
+    expect(happy).toContain("feito");
+
+    const blocked = renderToString(<PixelynAvatar state="bloqueada" />);
+    expect(blocked).toContain("bloqueada");
   });
 });
