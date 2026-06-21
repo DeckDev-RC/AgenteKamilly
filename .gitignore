@@ -22,6 +22,10 @@ clientes_cache.json
 # Screen recordings
 *.mp4
 
+# Local scratch (brainstorming/superpowers), never committed as product source
+.superpowers/
+**/.superpowers/
+
 # Dependencies / build
 node_modules/
 dist/
