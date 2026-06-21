@@ -15,7 +15,7 @@ describe("harness runtime", () => {
     const root = path.join(os.tmpdir(), "confere-project");
     const cwd = path.join(root, "harness");
 
-    expect(resolveConfigCwd(cwd)).toBe(path.resolve(root).replace(/\\/g, "/"));
+    expect(resolveConfigCwd(cwd)).toBe(path.resolve(root));
   });
 
   it("returns an empty registry plus warnings when provider session files are absent", async () => {

@@ -23,10 +23,9 @@ export type RuntimeRegistryResult = {
 };
 
 export function resolveConfigCwd(cwd = process.cwd()): string {
-  const configCwd = path.basename(cwd).toLowerCase() === "harness"
+  return path.basename(cwd).toLowerCase() === "harness"
     ? path.resolve(cwd, "..")
     : cwd;
-  return configCwd.replace(/\\/g, "/");
 }
 
 export async function createDefaultMappedToolRegistry(
