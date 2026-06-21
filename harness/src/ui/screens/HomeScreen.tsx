@@ -3,10 +3,11 @@ import type { ReactElement } from "react";
 
 import { ActionButton } from "../components/ActionButton.js";
 import { StatusPill } from "../components/StatusPill.js";
-import type { ScreenId } from "../types.js";
+
+type LegacyHomeTarget = "contaazul" | "asaas" | "operacoes";
 
 export function HomeScreen(props: {
-  onNavigate: (screen: ScreenId) => void;
+  onNavigate: (screen: LegacyHomeTarget) => void;
 }): ReactElement {
   return (
     <section className="screen">
