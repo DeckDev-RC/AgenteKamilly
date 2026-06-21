@@ -1,0 +1,176 @@
+:root {
+  color: #18202f;
+  background: #f6f7f9;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-synthesis: none;
+  text-rendering: geometricPrecision;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 1024px;
+  min-height: 100vh;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+.app-shell {
+  display: grid;
+  grid-template-columns: 248px minmax(0, 1fr);
+  min-height: 100vh;
+}
+
+.sidebar {
+  border-right: 1px solid #dce1e8;
+  background: #ffffff;
+  padding: 20px 16px;
+}
+
+.brand-block {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 28px;
+}
+
+.brand-mark {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border-radius: 8px;
+  background: #123c69;
+  color: #ffffff;
+  font-weight: 700;
+}
+
+.brand-block span {
+  display: block;
+  color: #697386;
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+.nav-list {
+  display: grid;
+  gap: 6px;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 42px;
+  border: 0;
+  border-radius: 8px;
+  color: #334155;
+  background: transparent;
+  padding: 0 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.nav-item:hover,
+.nav-item--active {
+  background: #e9eef5;
+  color: #123c69;
+}
+
+.main-surface {
+  min-width: 0;
+  padding: 24px;
+}
+
+.screen {
+  max-width: 1180px;
+}
+
+.eyebrow {
+  color: #5f6f89;
+  font-size: 13px;
+  font-weight: 700;
+  margin: 0 0 8px;
+  text-transform: uppercase;
+}
+
+h1 {
+  font-size: 32px;
+  line-height: 1.2;
+  margin: 0 0 8px;
+}
+
+.screen-lead {
+  color: #5d6878;
+  margin: 0;
+}
+
+.status-pill {
+  border-radius: 999px;
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 7px 10px;
+}
+
+.status-pill--neutral {
+  background: #e9eef5;
+  color: #334155;
+}
+
+.status-pill--good {
+  background: #dff6e6;
+  color: #166534;
+}
+
+.status-pill--warn {
+  background: #fff1c7;
+  color: #8a5a00;
+}
+
+.status-pill--danger {
+  background: #ffe1e1;
+  color: #a52828;
+}
+
+.action-button {
+  align-items: center;
+  border: 1px solid #cfd7e3;
+  border-radius: 8px;
+  cursor: pointer;
+  display: inline-flex;
+  gap: 8px;
+  min-height: 38px;
+  padding: 0 14px;
+}
+
+.action-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.56;
+}
+
+.action-button--primary {
+  background: #123c69;
+  border-color: #123c69;
+  color: #ffffff;
+}
+
+.action-button--secondary {
+  background: #ffffff;
+  color: #233044;
+}
+
+.action-button--danger {
+  background: #a52828;
+  border-color: #a52828;
+  color: #ffffff;
+}

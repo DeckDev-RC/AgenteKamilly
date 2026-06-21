@@ -9,7 +9,7 @@
     "skipLibCheck": true,
     "resolveJsonModule": true,
     "jsx": "react-jsx",
-    "types": ["node", "vitest"]
+    "types": ["node", "vitest", "react", "react-dom"]
   },
   "include": [
     "src/**/*.ts",
