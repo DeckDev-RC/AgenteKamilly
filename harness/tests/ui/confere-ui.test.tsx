@@ -2,6 +2,7 @@ import { renderToString } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { App } from "../../src/ui/App.js";
+import { ConfirmationSheet } from "../../src/ui/components/ConfirmationSheet.js";
 
 describe("Confere UI", () => {
   it("renders the product shell and module navigation", () => {
@@ -20,5 +21,36 @@ describe("Confere UI", () => {
     expect(html).toContain("Modo de operação");
     expect(html).toContain("Quota do modelo");
     expect(html).not.toContain("GEMINI_API_KEY");
+  });
+
+  it("renders workflow action language", () => {
+    const html = renderToString(<App />);
+
+    expect(html).toContain("Conta Azul");
+    expect(html).toContain("Asaas");
+  });
+
+  it("renders the final confirmation sheet before live approval", () => {
+    const html = renderToString(
+      <ConfirmationSheet
+        onCancel={() => undefined}
+        onConfirm={() => undefined}
+        open
+        sheet={{
+          operationId: "op_demo",
+          toolName: "contaazul.create_service_sale_boleto_workflow",
+          tenantId: 3047702,
+          customerName: "Cliente Demonstração",
+          itemName: "Honorário Contábil",
+          value: "10,00",
+          dueDate: "30/06/2026",
+          warnings: ["Revise antes de executar."]
+        }}
+      />
+    );
+
+    expect(html).toContain("Confirmar execução real");
+    expect(html).toContain("Cliente Demonstração");
+    expect(html).toContain("Aprovar execução real");
   });
 });
