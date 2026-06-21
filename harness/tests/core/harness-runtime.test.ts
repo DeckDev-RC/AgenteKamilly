@@ -12,7 +12,10 @@ import {
 
 describe("harness runtime", () => {
   it("resolves config cwd from the harness directory", () => {
-    expect(resolveConfigCwd("C:\\repo\\harness")).toBe("C:/repo");
+    const root = path.join(os.tmpdir(), "confere-project");
+    const cwd = path.join(root, "harness");
+
+    expect(resolveConfigCwd(cwd)).toBe(path.resolve(root).replace(/\\/g, "/"));
   });
 
   it("returns an empty registry plus warnings when provider session files are absent", async () => {
