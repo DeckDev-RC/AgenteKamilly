@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import { appendLedgerEntry } from "../../src/core/ledger.js";
 import {
   formatOperationSummary,
+  listOperationSummaries,
   summarizeOperationById
 } from "../../src/core/operation-summary.js";
 
@@ -103,6 +104,37 @@ describe("operation summary", () => {
     });
     expect(formatOperationSummary(summary)).toContain("Venda orfa: sale_uuid");
     expect(formatOperationSummary(summary)).toContain("Etapa com falha: poll_financial_event");
+  });
+
+  it("lists operation summaries newest first", async () => {
+    const ledgerPath = await tempLedgerPath();
+    await appendLedgerEntry(ledgerPath, {
+      operationId: "op_old",
+      provider: "asaas",
+      toolName: "asaas.create_boleto_charge_workflow",
+      status: "planned",
+      responseSummary: { summary: "old", customerName: "Cliente Antigo" },
+      artifacts: [],
+      warnings: []
+    });
+    await appendLedgerEntry(ledgerPath, {
+      operationId: "op_new",
+      provider: "contaazul",
+      toolName: "contaazul.create_service_sale_boleto_workflow",
+      status: "succeeded",
+      responseSummary: { summary: "new", saleNumber: 926 },
+      artifacts: [{ kind: "pdf", path: "boleto.pdf", label: "boleto" }],
+      warnings: ["demo warning"]
+    });
+
+    const summaries = await listOperationSummaries({ ledgerPath, limit: 10 });
+
+    expect(summaries.map((summary) => summary.operationId)).toEqual(["op_new", "op_old"]);
+    expect(summaries[0]).toMatchObject({
+      latestStatus: "succeeded",
+      saleNumber: 926,
+      warnings: ["demo warning"]
+    });
   });
 });
 

@@ -44,6 +44,32 @@ export async function summarizeOperationById(input: {
     };
   }
 
+  return summaryFromEntries(input.operationId, entries, input.includeEntries === true);
+}
+
+export async function listOperationSummaries(input: {
+  ledgerPath: string;
+  limit?: number;
+}): Promise<OperationSummary[]> {
+  const entries = await safeReadLedgerEntries(input.ledgerPath);
+  const byOperation = new Map<string, LedgerEntry[]>();
+  for (const entry of entries) {
+    const group = byOperation.get(entry.operationId) ?? [];
+    group.push(entry);
+    byOperation.set(entry.operationId, group);
+  }
+
+  return Array.from(byOperation.entries())
+    .map(([operationId, groupedEntries]) => summaryFromEntries(operationId, groupedEntries, false))
+    .sort((a, b) => (b.latestTimestamp ?? "").localeCompare(a.latestTimestamp ?? ""))
+    .slice(0, input.limit ?? 50);
+}
+
+function summaryFromEntries(
+  operationId: string,
+  entries: LedgerEntry[],
+  includeEntries: boolean
+): OperationSummary {
   const latest = entries[entries.length - 1]!;
   const summary = asRecord(latest.responseSummary);
   const artifacts = latest.artifacts.length > 0
@@ -51,7 +77,7 @@ export async function summarizeOperationById(input: {
     : lastNonEmptyArtifacts(entries);
 
   return {
-    operationId: input.operationId,
+    operationId,
     found: true,
     provider: latest.provider,
     toolName: latest.toolName,
@@ -71,7 +97,7 @@ export async function summarizeOperationById(input: {
     unitValue: stringOrNumber(summary?.unitValue),
     artifacts,
     warnings: unique(entries.flatMap((entry) => entry.warnings)),
-    entries: input.includeEntries ? entries : undefined
+    entries: includeEntries ? entries : undefined
   };
 }
 
