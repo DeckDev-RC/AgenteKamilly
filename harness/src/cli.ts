@@ -1,35 +1,23 @@
-import { existsSync } from "node:fs";
 import path from "node:path";
 
 import { config as loadDotenv } from "dotenv";
 import { runAgentTurn } from "./agent/agent-runner.js";
 import { createAgentModelProvider } from "./agent/model-provider-factory.js";
-import { planOrchestratorTurn, registerHarnessTools } from "./agent/orchestrator.js";
+import { planOrchestratorTurn } from "./agent/orchestrator.js";
 import { parseCliArgs, type CliArgs } from "./cli-args.js";
 import { loadHarnessConfig } from "./core/config.js";
+import {
+  createDefaultMappedToolRegistry,
+  resolveConfigCwd
+} from "./core/harness-runtime.js";
 import {
   formatOperationSummary,
   summarizeOperationById
 } from "./core/operation-summary.js";
-import { createToolRegistry, type ToolRegistry } from "./core/tool-registry.js";
-import {
-  checkContaAzulSessionState,
-  loadBrowserState
-} from "./core/session-store.js";
-import { loadAsaasCookieString, MappedAsaasSessionClient } from "./modules/asaas/client.js";
-import { createAsaasMutationTools, createAsaasReadTools } from "./modules/asaas/tools.js";
-import { MappedContaAzulSessionClient } from "./modules/contaazul/client.js";
-import {
-  createContaAzulMutationTools,
-  createContaAzulReadTools
-} from "./modules/contaazul/tools.js";
-import { createContaAzulWorkflowTools } from "./modules/contaazul/workflows.js";
 
 async function main(): Promise<void> {
   const args = parseCliArgs(process.argv.slice(2));
-  const configCwd = path.basename(process.cwd()).toLowerCase() === "harness"
-    ? path.resolve(process.cwd(), "..")
-    : process.cwd();
+  const configCwd = resolveConfigCwd(process.cwd());
   loadDotenv({ path: path.resolve(configCwd, ".env"), override: false, quiet: true });
   const config = loadHarnessConfig(
     {
@@ -72,8 +60,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  const warnings: string[] = [];
-  const registry = await createDefaultMappedToolRegistry(config, warnings);
+  const { registry, warnings } = await createDefaultMappedToolRegistry(config);
   if (args.agentMode) {
     const result = config.runtimeMode === "dry-run"
       ? await runAgentTurn({
@@ -118,85 +105,6 @@ async function main(): Promise<void> {
     result
   };
   printOutput(output, args.outputMode ?? "json", formatOperatorTurnOutput);
-}
-
-async function createDefaultMappedToolRegistry(
-  config: ReturnType<typeof loadHarnessConfig>,
-  warnings: string[]
-): Promise<ToolRegistry> {
-  const registry = createToolRegistry();
-
-  if (existsSync(config.asaasEnvPath)) {
-    try {
-      const asaasClient = new MappedAsaasSessionClient({
-        cookieString: loadAsaasCookieString(config.asaasEnvPath)
-      });
-      registerHarnessTools(registry, {
-        asaasRead: createAsaasReadTools({
-          client: asaasClient,
-          ledgerPath: config.ledgerPath,
-          runtimeMode: config.runtimeMode
-        }),
-        asaasMutation: createAsaasMutationTools({
-          client: asaasClient,
-          ledgerPath: config.ledgerPath,
-          artifactsDir: config.artifactsDir,
-          runtimeMode: config.runtimeMode,
-          allowLiveMutations: config.allowLiveMutations
-        })
-      });
-    } catch (error) {
-      warnings.push(error instanceof Error ? error.message : "Asaas session could not be loaded.");
-    }
-  } else {
-    warnings.push(`Asaas session env not found: ${config.asaasEnvPath}`);
-  }
-
-  if (existsSync(config.contaAzulStatePath)) {
-    try {
-      const state = await loadBrowserState(config.contaAzulStatePath);
-      const health = checkContaAzulSessionState(state);
-      if (!health.ok) {
-        warnings.push(`${health.reason} ${health.recaptureCommand ?? ""}`.trim());
-      } else {
-        const contaAzulClient = new MappedContaAzulSessionClient({ state });
-        const proSessionStore = new Map<string, string>();
-        const contaAzulMutationOptions = {
-          client: contaAzulClient,
-          ledgerPath: config.ledgerPath,
-          artifactsDir: config.artifactsDir,
-          runtimeMode: config.runtimeMode,
-          allowLiveMutations: config.allowLiveMutations,
-          config: {
-            financialAccountId: config.contaAzulFinancialAccountId,
-            defaultReplyToEmail: config.contaAzulDefaultReplyToEmail,
-            defaultCompanyDisplayName: config.contaAzulDefaultCompanyDisplayName
-          },
-          proSessionStore
-        };
-        registerHarnessTools(registry, {
-          contaAzulRead: createContaAzulReadTools({
-            client: contaAzulClient,
-            ledgerPath: config.ledgerPath,
-            runtimeMode: config.runtimeMode,
-            proSessionStore
-          }),
-          contaAzulMutation: {
-            ...createContaAzulMutationTools(contaAzulMutationOptions),
-            ...createContaAzulWorkflowTools(contaAzulMutationOptions)
-          }
-        });
-      }
-    } catch (error) {
-      warnings.push(
-        error instanceof Error ? error.message : "Conta Azul session could not be loaded."
-      );
-    }
-  } else {
-    warnings.push(`Conta Azul state not found: ${config.contaAzulStatePath}`);
-  }
-
-  return registry;
 }
 
 function printOutput<T>(
