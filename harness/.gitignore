@@ -9,4 +9,7 @@ downloads/
 captured_*.json
 node_modules/
 dist/
+dist-electron/
+out/
 coverage/
+.superpowers/

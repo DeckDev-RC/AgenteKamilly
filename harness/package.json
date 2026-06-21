@@ -1,22 +1,36 @@
 {
-  "name": "kamilly-agent-harness",
+  "name": "confere-harness",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "tsx src/cli.ts",
+    "server:dev": "tsx src/server/dev-server.ts",
+    "desktop:dev": "electron-vite dev",
+    "desktop:build": "electron-vite build",
     "contaazul:controlled-sale": "tsx scripts/contaazul-controlled-sale-test.ts",
     "test": "vitest run",
+    "test:ui": "vitest run --config vitest.ui.config.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "dotenv": "^17.4.2",
-    "zod": "^4.2.0"
+    "lucide-react": "^1.21.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@types/node": "^24.10.1",
-    "tsx": "^4.21.0",
+    "@types/node": "^24.13.2",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.2.0",
+    "electron": "^42.4.1",
+    "electron-vite": "^5.0.0",
+    "jsdom": "^29.1.1",
+    "tsx": "^4.22.4",
     "typescript": "^5.9.3",
-    "vitest": "^4.0.15"
+    "vite": "^7.3.5",
+    "vitest": "^4.1.9"
   }
 }
