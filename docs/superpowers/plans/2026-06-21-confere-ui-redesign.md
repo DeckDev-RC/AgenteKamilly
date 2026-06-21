@@ -159,9 +159,7 @@ Expected: PASS (7 tests).
 
 Run (from `C:\Kamilly\harness`): `npm run typecheck`
 ```bash
-cd C:/Kamilly && git add harness/src/ui/lib/pixelyn-state.ts harness/tests/ui/pixelyn-state.test.ts && git commit -m "feat(ui): pixelyn state mapper
-
-Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
+cd C:/Kamilly && git add harness/src/ui/lib/pixelyn-state.ts harness/tests/ui/pixelyn-state.test.ts && git commit -m "feat(ui): pixelyn state mapper"
 ```
 
 ---
@@ -245,9 +243,7 @@ Expected: PASS. (The avatar is unstyled until Task 6 — that is fine; the test 
 
 Run (from `C:\Kamilly\harness`): `npm run typecheck`
 ```bash
-cd C:/Kamilly && git add harness/src/ui/components/PixelynAvatar.tsx harness/tests/ui/confere-ui.test.tsx && git commit -m "feat(ui): pixelyn avatar component
-
-Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
+cd C:/Kamilly && git add harness/src/ui/components/PixelynAvatar.tsx harness/tests/ui/confere-ui.test.tsx && git commit -m "feat(ui): pixelyn avatar component"
 ```
 
 ---
@@ -366,9 +362,7 @@ Expected: PASS for `src/**`. If `tsc` flags `tests/ui/confere-ui.test.tsx` (it s
 - [ ] **Step 5: Commit**
 
 ```bash
-cd C:/Kamilly && git add harness/src/ui/components/SlimRail.tsx harness/src/ui/types.ts harness/src/ui/App.tsx && git commit -m "feat(ui): slim rail + assistant-first routing
-
-Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
+cd C:/Kamilly && git add harness/src/ui/components/SlimRail.tsx harness/src/ui/types.ts harness/src/ui/App.tsx && git commit -m "feat(ui): slim rail + assistant-first routing"
 ```
 
 ---
@@ -480,9 +474,7 @@ Expected: PASS.
 
 Run (from `C:\Kamilly\harness`): `npm run typecheck`
 ```bash
-cd C:/Kamilly && git add harness/src/ui/components/PlanCard.tsx harness/tests/ui/confere-ui.test.tsx && git commit -m "feat(ui): plan card with business facts
-
-Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
+cd C:/Kamilly && git add harness/src/ui/components/PlanCard.tsx harness/tests/ui/confere-ui.test.tsx && git commit -m "feat(ui): plan card with business facts"
 ```
 
 ---
@@ -713,9 +705,7 @@ Expected: PASS for `src/**`. (`tests/ui/confere-ui.test.tsx` is rewritten in Tas
 - [ ] **Step 5: Commit**
 
 ```bash
-cd C:/Kamilly && git add harness/src/ui/screens/AssistantScreen.tsx harness/src/ui/App.tsx && git commit -m "feat(ui): assistant conversation screen replaces per-module workflow
-
-Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
+cd C:/Kamilly && git add harness/src/ui/screens/AssistantScreen.tsx harness/src/ui/App.tsx && git commit -m "feat(ui): assistant conversation screen replaces per-module workflow"
 ```
 
 ---
@@ -820,9 +810,7 @@ Run (from `C:\Kamilly\harness`): `npm run desktop:dev`. Expect the window to ope
 
 Run (from `C:\Kamilly\harness`): `npm run typecheck`
 ```bash
-cd C:/Kamilly && git add harness/src/ui/styles.css && git commit -m "style(ui): finance-os-claro rail, conversation, plan card, pixelyn avatar
-
-Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
+cd C:/Kamilly && git add harness/src/ui/styles.css && git commit -m "style(ui): finance-os-claro rail, conversation, plan card, pixelyn avatar"
 ```
 
 ---
@@ -937,9 +925,7 @@ Expected: backend 157 tests pass; typecheck clean.
 - [ ] **Step 4: Commit**
 
 ```bash
-cd C:/Kamilly && git add harness/tests/ui/confere-ui.test.tsx && git commit -m "test(ui): cover assistant-first shell, pixelyn avatar, plan card
-
-Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
+cd C:/Kamilly && git add harness/tests/ui/confere-ui.test.tsx && git commit -m "test(ui): cover assistant-first shell, pixelyn avatar, plan card"
 ```
 
 ---
