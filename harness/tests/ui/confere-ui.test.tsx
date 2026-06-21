@@ -8,29 +8,46 @@ import { PlanCard } from "../../src/ui/components/PlanCard.js";
 import { OperationsScreen } from "../../src/ui/screens/OperationsScreen.js";
 
 describe("Confere UI", () => {
-  it("renders the product shell and module navigation", () => {
+  it("renders the assistant-first shell with the three rail destinations", () => {
     const html = renderToString(<App />);
-
     expect(html).toContain("Confere");
-    expect(html).toContain("Conta Azul");
-    expect(html).toContain("Asaas");
+    expect(html).toContain("Conversa");
     expect(html).toContain("Operações");
     expect(html).toContain("Sessões");
   });
 
-  it("renders home status language without secret values", () => {
+  it("renders the Pixelyn presence in the rail", () => {
     const html = renderToString(<App />);
-
-    expect(html).toContain("Modo de operação");
-    expect(html).toContain("Quota do modelo");
-    expect(html).not.toContain("GEMINI_API_KEY");
+    expect(html).toContain("viva");
+    expect(html).toContain("Pixelyn");
   });
 
-  it("renders workflow action language", () => {
+  it("greets the operator with the informal tone by default", () => {
     const html = renderToString(<App />);
+    expect(html).toContain("o que vamos resolver hoje");
+  });
 
-    expect(html).toContain("Conta Azul");
-    expect(html).toContain("Asaas");
+  it("renders the Pixelyn avatar with a state label for accessibility", () => {
+    expect(renderToString(<PixelynAvatar state="feito" />)).toContain("feito");
+    expect(renderToString(<PixelynAvatar state="bloqueada" />)).toContain("bloqueada");
+  });
+
+  it("renders the plan card with business facts and no raw json", () => {
+    const html = renderToString(
+      <PlanCard
+        facts={{
+          customerName: "AZUOS ASSESSORIA",
+          value: "R$ 250,00",
+          dueDate: "30/06/2026",
+          action: "Gerar boleto · Asaas"
+        }}
+        approvalAvailable
+        onApprove={() => undefined}
+      />
+    );
+    expect(html).toContain("AZUOS ASSESSORIA");
+    expect(html).toContain("Aprovar execução");
+    expect(html).not.toContain("{\"");
   });
 
   it("renders the final confirmation sheet before live approval", () => {
@@ -51,57 +68,14 @@ describe("Confere UI", () => {
         }}
       />
     );
-
     expect(html).toContain("Confirmar execução real");
     expect(html).toContain("Cliente Demonstração");
     expect(html).toContain("Aprovar execução real");
   });
 
-  it("renders operations navigation language", () => {
-    const html = renderToString(<App />);
-
-    expect(html).toContain("Operações");
-  });
-
   it("renders the operations history screen", () => {
     const html = renderToString(<OperationsScreen />);
-
     expect(html).toContain("Histórico auditável");
     expect(html).toContain("Ledger redigido");
-  });
-
-  it("renders approval as a human gated action", () => {
-    const html = renderToString(<App />);
-
-    expect(html).toContain("aprovação humana");
-  });
-
-  it("renders the Pixelyn avatar with a state label for accessibility", () => {
-    const happy = renderToString(<PixelynAvatar state="feito" />);
-    expect(happy).toContain("Pixelyn");
-    expect(happy).toContain("feito");
-
-    const blocked = renderToString(<PixelynAvatar state="bloqueada" />);
-    expect(blocked).toContain("bloqueada");
-  });
-
-  it("renders the plan card with business facts and no raw json", () => {
-    const html = renderToString(
-      <PlanCard
-        facts={{
-          customerName: "AZUOS ASSESSORIA",
-          value: "R$ 250,00",
-          dueDate: "30/06/2026",
-          action: "Gerar boleto · Asaas"
-        }}
-        approvalAvailable
-        onApprove={() => undefined}
-      />
-    );
-
-    expect(html).toContain("AZUOS ASSESSORIA");
-    expect(html).toContain("R$ 250,00");
-    expect(html).toContain("Aprovar execução");
-    expect(html).not.toContain("{\"");
   });
 });

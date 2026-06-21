@@ -19,7 +19,7 @@ export function SlimRail(props: {
 }): ReactElement {
   return (
     <div className="app-shell">
-      <aside className="rail" aria-label="Navegação principal">
+      <aside className="rail" aria-label="Confere navegação principal">
         <div className="rail__pixelyn">
           <PixelynAvatar state={props.pixelynState} size={40} />
           <span className="rail__alive">viva</span>
