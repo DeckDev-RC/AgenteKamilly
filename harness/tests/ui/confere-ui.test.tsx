@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { App } from "../../src/ui/App.js";
 import { ConfirmationSheet } from "../../src/ui/components/ConfirmationSheet.js";
 import { PixelynAvatar } from "../../src/ui/components/PixelynAvatar.js";
+import { PlanCard } from "../../src/ui/components/PlanCard.js";
 import { OperationsScreen } from "../../src/ui/screens/OperationsScreen.js";
 
 describe("Confere UI", () => {
@@ -82,5 +83,25 @@ describe("Confere UI", () => {
 
     const blocked = renderToString(<PixelynAvatar state="bloqueada" />);
     expect(blocked).toContain("bloqueada");
+  });
+
+  it("renders the plan card with business facts and no raw json", () => {
+    const html = renderToString(
+      <PlanCard
+        facts={{
+          customerName: "AZUOS ASSESSORIA",
+          value: "R$ 250,00",
+          dueDate: "30/06/2026",
+          action: "Gerar boleto · Asaas"
+        }}
+        approvalAvailable
+        onApprove={() => undefined}
+      />
+    );
+
+    expect(html).toContain("AZUOS ASSESSORIA");
+    expect(html).toContain("R$ 250,00");
+    expect(html).toContain("Aprovar execução");
+    expect(html).not.toContain("{\"");
   });
 });
