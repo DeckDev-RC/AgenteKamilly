@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build the Confere local desktop MVP on top of the existing harness, with a real Electron interface, local API, agent dry-run planning, contextual live approval, operation history, and session/quota status.
+**Goal:** Build the Confere local desktop MVP on top of the existing harness, with a real Electron interface, local service bridge, agent dry-run planning, contextual live approval, operation history, and session/quota status.
 
-**Architecture:** Extract harness bootstrapping from the CLI into a reusable runtime factory, then add a local HTTP API consumed by an Electron + React renderer. The UI only calls product-level workflow endpoints; provider/session HTTP clients and low-level tools remain behind the harness registry and safe workflow router.
+**Architecture:** Extract harness bootstrapping from the CLI into a reusable runtime factory, then make the Electron renderer call the harness through a typed preload IPC bridge. A standalone local HTTP server remains available only for development/debug non-mutating routes; live execution must go through Electron IPC only. Provider/session HTTP clients and low-level tools remain behind the harness registry and safe workflow router.
 
-**Tech Stack:** Node.js, TypeScript, Zod, Vitest, Electron, electron-vite, React, Vite, lucide-react, native Node HTTP server, existing harness ledger/artifact/session modules.
+**Tech Stack:** Node.js, TypeScript, Zod, Vitest, Electron IPC/preload, electron-vite, React, Vite, lucide-react, native Node HTTP server for development-only non-mutating routes, existing harness ledger/artifact/session modules.
 
 ---
 
@@ -29,25 +29,26 @@ Create or modify these files:
 - Create `harness/tests/core/harness-runtime.test.ts`: runtime bootstrap tests with missing sessions and forbidden official tool names preserved.
 - Modify `harness/src/core/operation-summary.ts`: add operation-list summary support.
 - Modify `harness/tests/core/operation-summary.test.ts`: operation list grouping tests.
-- Create `harness/src/server/api-types.ts`: request/response contracts for UI and local API.
+- Create `harness/src/server/api-types.ts`: request/response contracts for UI, Electron IPC, and the development HTTP API.
 - Create `harness/src/server/draft-store.ts`: in-memory exact-params handoff store for active dry-run plans.
 - Create `harness/tests/server/draft-store.test.ts`: draft store behavior tests.
-- Create `harness/src/server/confere-service.ts`: application service used by HTTP API and tests.
+- Create `harness/src/server/confere-service.ts`: application service used by HTTP API, Electron IPC, and tests.
 - Create `harness/tests/server/confere-service.test.ts`: agent turn, status, operation summary, and approval handoff tests.
-- Create `harness/src/server/local-api.ts`: native HTTP server routes.
-- Create `harness/tests/server/local-api.test.ts`: HTTP route contract tests.
+- Create `harness/src/server/local-api.ts`: development-only native HTTP server routes for status, agent dry-run, and operation history only.
+- Create `harness/tests/server/local-api.test.ts`: HTTP route contract tests proving live execution is not exposed over HTTP.
 - Create `harness/src/server/dev-server.ts`: starts local API without Electron for smoke/debug.
-- Create `harness/src/desktop/main.ts`: Electron main process, starts local API, opens renderer.
-- Create `harness/src/desktop/preload.ts`: safe bridge exposing API base URL and shell actions.
+- Create `harness/src/desktop/main.ts`: Electron main process, owns Confere service IPC, optionally starts local dev API, opens renderer.
+- Create `harness/src/desktop/preload.ts`: safe bridge exposing typed Confere service calls and shell actions.
 - Create `harness/src/desktop/types.d.ts`: renderer global type declarations.
 - Create `harness/src/ui/main.tsx`: React entrypoint.
 - Create `harness/src/ui/App.tsx`: app shell and screen routing.
-- Create `harness/src/ui/api.ts`: typed fetch client for local API.
+- Create `harness/src/ui/api.ts`: typed client that uses Electron preload IPC in desktop and HTTP only as a non-mutating browser-dev fallback.
 - Create `harness/src/ui/types.ts`: UI state types derived from API contracts.
 - Create `harness/src/ui/styles.css`: Finance OS claro visual system.
 - Create `harness/src/ui/components/AppShell.tsx`: sidebar/top status layout.
 - Create `harness/src/ui/components/StatusPill.tsx`: compact status indicator.
 - Create `harness/src/ui/components/ActionButton.tsx`: contextual buttons with icons.
+- Create `harness/src/ui/components/ConfirmationSheet.tsx`: final approval sheet before live IPC execution.
 - Create `harness/src/ui/components/OperationSummaryPanel.tsx`: reusable operation details panel.
 - Create `harness/src/ui/screens/HomeScreen.tsx`: module chooser and quick status.
 - Create `harness/src/ui/screens/WorkflowScreen.tsx`: shared Conta Azul/Asaas conversational workflow screen.
@@ -716,9 +717,8 @@ Expected: FAIL because server files do not exist.
 Create `harness/src/server/api-types.ts`:
 
 ```ts
-import type { AgentRunResult } from "../agent/agent-runner.js";
 import type { OperationSummary } from "../core/operation-summary.js";
-import type { RuntimeMode, ToolReceipt } from "../core/tool-types.js";
+import type { OperationStatus, Provider, RuntimeMode } from "../core/tool-types.js";
 
 export type ConfereModule = "home" | "contaazul" | "asaas" | "operacoes" | "sessoes";
 
@@ -751,25 +751,74 @@ export type AgentTurnApiRequest = {
 
 export type AgentTurnApiResponse = {
   status: "ok";
-  result: AgentRunResult;
+  result: AgentResultView;
   draftOperationId?: string;
   warnings: string[];
+};
+
+export type AgentResultView = {
+  status: "needs_input" | "planned" | "blocked" | "unsupported" | "executed";
+  provider?: Provider | "gemini";
+  model?: string;
+  intent?: string;
+  toolName?: string;
+  operationId?: string;
+  receiptStatus?: OperationStatus;
+  summary?: string;
+  missingFields: string[];
+  questions: string[];
+  warnings: string[];
+  risk?: "low" | "medium" | "high";
+  confidence?: number;
+  approvalAvailable: boolean;
+  reason?: string;
 };
 
 export type ExecuteOperationApiRequest = {
   operationId: string;
 };
 
-export type ExecuteOperationApiResponse =
+export type ConfirmationSheetApiResponse =
   | {
-      status: "executed";
-      receipt: ToolReceipt;
-      summary?: OperationSummary;
+      status: "ok";
+      sheet: ConfirmationSheetView;
     }
   | {
       status: "blocked";
       reason: string;
     };
+
+export type ExecuteOperationApiResponse =
+  | {
+      status: "executed";
+      operation: OperationSummary;
+      receiptStatus: OperationStatus;
+      warnings: string[];
+    }
+  | {
+      status: "blocked";
+      reason: string;
+    };
+
+export type ConfirmationSheetView = {
+  operationId: string;
+  toolName?: string;
+  provider?: Provider;
+  tenantId?: string | number;
+  tenantName?: string;
+  customerName?: string;
+  categoryName?: string;
+  itemName?: string;
+  description?: string;
+  value?: string | number;
+  dueDate?: string;
+  saleNumber?: string | number;
+  chargeUrl?: string;
+  idempotencyKey?: string;
+  duplicateOperationId?: string;
+  orphanedSaleId?: string;
+  warnings: string[];
+};
 
 export type OperationListApiResponse = {
   status: "ok";
@@ -933,9 +982,57 @@ describe("confere service", () => {
     });
 
     expect(response.draftOperationId).toBe("op_agent");
+    expect(response.result).toMatchObject({
+      status: "executed",
+      operationId: "op_agent",
+      receiptStatus: "planned",
+      approvalAvailable: true
+    });
+    expect(JSON.stringify(response.result)).not.toContain("Cliente Exemplo");
     expect(service.getDraft("op_agent")).toMatchObject({
       operationId: "op_agent",
       params: { customerName: "Cliente Exemplo" }
+    });
+  });
+
+  it("builds the confirmation sheet from the active draft params", async () => {
+    const service = await createConfereService({
+      cwd: await mkdtemp(path.join(os.tmpdir(), "confere-service-")),
+      env: { RUNTIME_MODE: "dry-run" },
+      registryFactory: async () => ({ registry: createToolRegistry(), warnings: [] }),
+      modelProvider: createFakeModelProvider({})
+    });
+    service.saveDraftForTest({
+      operationId: "op_sheet",
+      toolName: "contaazul.create_service_sale_boleto_workflow",
+      request: "criar venda",
+      params: {
+        tenantId: 3047702,
+        customerName: "Cliente Exemplo",
+        categoryName: "Honorário contábil mensal",
+        itemName: "Honorário Contábil",
+        serviceDescription: "Honorário mensal",
+        unitValueBr: "10,00",
+        dueDateBr: "30/06/2026",
+        idempotencyKey: "idem_demo"
+      },
+      createdAt: "2026-06-20T12:00:00.000Z"
+    });
+
+    const response = await service.getConfirmationSheet("op_sheet");
+
+    expect(response).toMatchObject({
+      status: "ok",
+      sheet: {
+        operationId: "op_sheet",
+        tenantId: 3047702,
+        customerName: "Cliente Exemplo",
+        itemName: "Honorário Contábil",
+        description: "Honorário mensal",
+        value: "10,00",
+        dueDate: "30/06/2026",
+        idempotencyKey: "idem_demo"
+      }
     });
   });
 
@@ -991,6 +1088,10 @@ describe("confere service", () => {
     const response = await service.executeApprovedOperation({ operationId: "op_agent" });
 
     expect(response.status).toBe("executed");
+    if (response.status === "executed") {
+      expect(response.receiptStatus).toBe("succeeded");
+      expect(response.operation.operationId).toBe("op_agent");
+    }
     expect(calls).toEqual([
       {
         operationId: "op_agent",
@@ -1001,6 +1102,39 @@ describe("confere service", () => {
         description: "Honorarios"
       }
     ]);
+  });
+
+  it("blocks live execution for a draft whose tool is not on the workflow allowlist", async () => {
+    const registry = createToolRegistry();
+    registry.register({
+      name: "asaas.create_boleto_charge",
+      description: "low-level mutation",
+      parameters: z.object({}),
+      execute: async () => {
+        throw new Error("should not execute");
+      }
+    });
+    const service = await createConfereService({
+      cwd: await mkdtemp(path.join(os.tmpdir(), "confere-service-")),
+      env: { ALLOW_LIVE_MUTATIONS: "true" },
+      registryFactory: async () => ({ registry, warnings: [] }),
+      modelProvider: createFakeModelProvider({})
+    });
+    service.saveDraftForTest({
+      operationId: "op_low",
+      toolName: "asaas.create_boleto_charge",
+      request: "criar boleto",
+      params: {},
+      createdAt: "2026-06-20T12:00:00.000Z"
+    });
+
+    const response = await service.executeApprovedOperation({ operationId: "op_low" });
+
+    expect(response).toEqual({
+      status: "blocked",
+      reason: "Tool is not allowed for Confere live approval: asaas.create_boleto_charge"
+    });
+    expect(service.getDraft("op_low")).toMatchObject({ operationId: "op_low" });
   });
 });
 
@@ -1074,6 +1208,8 @@ import type { ToolRegistry } from "../core/tool-registry.js";
 import type {
   AgentTurnApiRequest,
   AgentTurnApiResponse,
+  ConfirmationSheetApiResponse,
+  ConfirmationSheetView,
   ConfereStatus,
   ExecuteOperationApiRequest,
   ExecuteOperationApiResponse
@@ -1087,6 +1223,7 @@ import {
 export type ConfereService = {
   getStatus(): Promise<ConfereStatus>;
   runAgentTurn(input: AgentTurnApiRequest): Promise<AgentTurnApiResponse>;
+  getConfirmationSheet(operationId: string): Promise<ConfirmationSheetApiResponse>;
   executeApprovedOperation(input: ExecuteOperationApiRequest): Promise<ExecuteOperationApiResponse>;
   listOperations(limit?: number): Promise<Awaited<ReturnType<typeof listOperationSummaries>>>;
   summarizeOperation(operationId: string): Promise<Awaited<ReturnType<typeof summarizeOperationById>>>;
@@ -1179,7 +1316,32 @@ export async function createConfereService(
         request: input.request,
         result
       });
-      return { status: "ok", result, draftOperationId, warnings };
+      return {
+        status: "ok",
+        result: toAgentResultView(result),
+        draftOperationId,
+        warnings
+      };
+    },
+
+    async getConfirmationSheet(operationId) {
+      const draft = draftStore.get(operationId);
+      if (!draft) {
+        return {
+          status: "blocked",
+          reason: `No active dry-run draft found for operation: ${operationId}`
+        };
+      }
+      if (!isLiveApprovalToolAllowed(draft.toolName)) {
+        return {
+          status: "blocked",
+          reason: `Tool is not allowed for Confere live approval: ${draft.toolName}`
+        };
+      }
+      return {
+        status: "ok",
+        sheet: confirmationSheetFromDraft(draft)
+      };
     },
 
     async executeApprovedOperation(input) {
@@ -1188,6 +1350,13 @@ export async function createConfereService(
         return {
           status: "blocked",
           reason: `No active dry-run draft found for operation: ${input.operationId}`
+        };
+      }
+      if (!isLiveApprovalToolAllowed(draft.toolName)) {
+        draftStore.save(draft);
+        return {
+          status: "blocked",
+          reason: `Tool is not allowed for Confere live approval: ${draft.toolName}`
         };
       }
       const { config, registry } = await runtime("live");
@@ -1209,11 +1378,16 @@ export async function createConfereService(
         approvalText: `APROVAR ${input.operationId}`
       });
       const receipt = await tool.execute(params);
-      const summary = await summarizeOperationById({
+      const operation = await summarizeOperationById({
         ledgerPath: config.ledgerPath,
         operationId: input.operationId
       });
-      return { status: "executed", receipt, summary };
+      return {
+        status: "executed",
+        operation,
+        receiptStatus: receipt.status,
+        warnings: receipt.warnings
+      };
     },
 
     async listOperations(limit) {
@@ -1258,6 +1432,114 @@ function saveDraftFromAgentResult(input: {
     createdAt: new Date().toISOString()
   });
   return operationId;
+}
+
+const LIVE_APPROVAL_TOOL_ALLOWLIST = new Set([
+  "asaas.create_boleto_charge_workflow",
+  "contaazul.create_service_sale_boleto_workflow",
+  "contaazul.acknowledge_orphan_cleanup"
+]);
+
+function isLiveApprovalToolAllowed(toolName: string): boolean {
+  return LIVE_APPROVAL_TOOL_ALLOWLIST.has(toolName);
+}
+
+function confirmationSheetFromDraft(draft: OperationDraft): ConfirmationSheetView {
+  return {
+    operationId: draft.operationId,
+    toolName: draft.toolName,
+    provider: draft.toolName.startsWith("asaas.") ? "asaas" : "contaazul",
+    tenantId: stringOrNumber(draft.params.tenantId),
+    tenantName: stringValue(draft.params.tenantName) ?? stringValue(draft.params.companyName),
+    customerName: stringValue(draft.params.customerName),
+    categoryName: stringValue(draft.params.categoryName),
+    itemName: stringValue(draft.params.itemName),
+    description:
+      stringValue(draft.params.serviceDescription) ?? stringValue(draft.params.description),
+    value:
+      stringOrNumber(draft.params.unitValue) ??
+      stringValue(draft.params.unitValueBr) ??
+      stringValue(draft.params.valueBr),
+    dueDate:
+      stringValue(draft.params.dueDateBr) ??
+      stringValue(draft.params.dueDateIso),
+    idempotencyKey: stringValue(draft.params.idempotencyKey),
+    warnings: []
+  };
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function stringOrNumber(value: unknown): string | number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  return stringValue(value);
+}
+
+function toAgentResultView(result: Awaited<ReturnType<typeof runAgentTurn>>) {
+  if (result.status === "executed") {
+    return {
+      status: "executed" as const,
+      provider: result.provider,
+      model: result.model,
+      intent: result.plan.intent,
+      toolName: result.receipt.toolName,
+      operationId: result.receipt.operationId,
+      receiptStatus: result.receipt.status,
+      summary: result.receipt.summary,
+      missingFields: [],
+      questions: [],
+      warnings: result.receipt.warnings,
+      risk: result.plan.risk,
+      confidence: result.plan.confidence,
+      approvalAvailable: result.receipt.status === "planned"
+    };
+  }
+
+  if (result.status === "needs_input") {
+    return {
+      status: "needs_input" as const,
+      provider: result.provider,
+      model: result.model,
+      intent: result.intent,
+      toolName: result.toolName,
+      missingFields: result.missingFields,
+      questions: result.questions,
+      warnings: [],
+      risk: result.risk,
+      confidence: result.confidence,
+      approvalAvailable: false,
+      reason: result.reason
+    };
+  }
+
+  if (result.status === "planned") {
+    return {
+      status: "planned" as const,
+      provider: result.provider,
+      model: result.model,
+      intent: result.plan.intent,
+      toolName: result.plan.toolName,
+      missingFields: [],
+      questions: [],
+      warnings: [],
+      risk: result.plan.risk,
+      confidence: result.plan.confidence,
+      approvalAvailable: false,
+      reason: result.plan.reason
+    };
+  }
+
+  return {
+    status: result.status,
+    missingFields: [],
+    questions: [],
+    warnings: [],
+    approvalAvailable: false,
+    reason: "reason" in result ? result.reason : undefined,
+    toolName: "toolName" in result ? result.toolName : undefined
+  };
 }
 ```
 
@@ -1362,6 +1644,20 @@ describe("local api", () => {
     expect(response.status).toBe(400);
     expect(await response.json()).toMatchObject({ status: "error" });
   });
+
+  it("does not expose live execution over HTTP", async () => {
+    const server = await startConfereLocalApi({ service: fakeService() });
+    servers.push(server);
+
+    const response = await fetch(`${server.url}/api/operations/op_1/execute`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({})
+    });
+
+    expect(response.status).toBe(404);
+    expect(await response.json()).toMatchObject({ status: "error" });
+  });
 });
 
 function fakeService(): ConfereService {
@@ -1390,9 +1686,16 @@ function fakeService(): ConfereService {
         warnings: [],
         result: {
           status: "blocked",
-          reason: "fake"
+          reason: "fake",
+          missingFields: [],
+          questions: [],
+          warnings: [],
+          approvalAvailable: false
         }
       };
+    },
+    async getConfirmationSheet() {
+      return { status: "blocked", reason: "fake" };
     },
     async executeApprovedOperation() {
       return { status: "blocked", reason: "fake" };
@@ -1500,14 +1803,6 @@ async function routeRequest(
     return;
   }
 
-  const executeMatch = url.pathname.match(/^\/api\/operations\/([^/]+)\/execute$/);
-  if (request.method === "POST" && executeMatch) {
-    writeJson(response, 200, await service.executeApprovedOperation({
-      operationId: decodeURIComponent(executeMatch[1]!)
-    }));
-    return;
-  }
-
   if (request.method === "POST" && url.pathname === "/api/agent/turn") {
     const body = await readJson(request);
     if (!body.ok) {
@@ -1542,9 +1837,7 @@ async function readJson(request: http.IncomingMessage): Promise<
 
 function writeJson(response: http.ServerResponse, statusCode: number, value: unknown): void {
   response.writeHead(statusCode, {
-    "content-type": "application/json; charset=utf-8",
-    "access-control-allow-origin": "http://localhost:5173",
-    "access-control-allow-headers": "content-type"
+    "content-type": "application/json; charset=utf-8"
   });
   response.end(JSON.stringify(value));
 }
@@ -1613,8 +1906,13 @@ export {};
 
 declare global {
   interface Window {
-    confere: {
-      getApiBaseUrl(): Promise<string>;
+    confere?: {
+      getStatus(): Promise<import("../server/api-types.js").ConfereStatus>;
+      runAgentTurn(input: import("../server/api-types.js").AgentTurnApiRequest): Promise<import("../server/api-types.js").AgentTurnApiResponse>;
+      listOperations(): Promise<import("../server/api-types.js").OperationListApiResponse>;
+      getOperation(operationId: string): Promise<import("../server/api-types.js").OperationSummaryApiResponse>;
+      getConfirmationSheet(operationId: string): Promise<import("../server/api-types.js").ConfirmationSheetApiResponse>;
+      executeApprovedOperation(operationId: string): Promise<import("../server/api-types.js").ExecuteOperationApiResponse>;
       openExternal(url: string): Promise<void>;
       openPath(path: string): Promise<void>;
     };
@@ -1630,7 +1928,15 @@ Create `harness/src/desktop/preload.ts`:
 import { contextBridge, ipcRenderer } from "electron";
 
 contextBridge.exposeInMainWorld("confere", {
-  getApiBaseUrl: () => ipcRenderer.invoke("confere:get-api-base-url"),
+  getStatus: () => ipcRenderer.invoke("confere:get-status"),
+  runAgentTurn: (input: import("../server/api-types.js").AgentTurnApiRequest) =>
+    ipcRenderer.invoke("confere:run-agent-turn", input),
+  listOperations: () => ipcRenderer.invoke("confere:list-operations"),
+  getOperation: (operationId: string) => ipcRenderer.invoke("confere:get-operation", operationId),
+  getConfirmationSheet: (operationId: string) =>
+    ipcRenderer.invoke("confere:get-confirmation-sheet", operationId),
+  executeApprovedOperation: (operationId: string) =>
+    ipcRenderer.invoke("confere:execute-approved-operation", operationId),
   openExternal: (url: string) => ipcRenderer.invoke("confere:open-external", url),
   openPath: (filePath: string) => ipcRenderer.invoke("confere:open-path", filePath)
 });
@@ -1644,13 +1950,18 @@ Create `harness/src/desktop/main.ts`:
 import { app, BrowserWindow, ipcMain, shell } from "electron";
 import path from "node:path";
 
+import { createConfereService, type ConfereService } from "../server/confere-service.js";
 import { startConfereLocalApi, type ConfereLocalApi } from "../server/local-api.js";
 
 let mainWindow: BrowserWindow | undefined;
 let localApi: ConfereLocalApi | undefined;
+let confereService: ConfereService | undefined;
 
 async function createWindow(): Promise<void> {
-  localApi = await startConfereLocalApi();
+  confereService = await createConfereService();
+  if (process.env.CONFERE_START_HTTP_API === "true") {
+    localApi = await startConfereLocalApi({ service: confereService });
+  }
 
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -1674,9 +1985,34 @@ async function createWindow(): Promise<void> {
   }
 }
 
-ipcMain.handle("confere:get-api-base-url", () => {
-  if (!localApi) throw new Error("Confere local API is not running.");
-  return localApi.url;
+ipcMain.handle("confere:get-status", async () => {
+  if (!confereService) throw new Error("Confere service is not ready.");
+  return confereService.getStatus();
+});
+
+ipcMain.handle("confere:run-agent-turn", async (_event, input) => {
+  if (!confereService) throw new Error("Confere service is not ready.");
+  return confereService.runAgentTurn(input);
+});
+
+ipcMain.handle("confere:list-operations", async () => {
+  if (!confereService) throw new Error("Confere service is not ready.");
+  return { status: "ok", operations: await confereService.listOperations(50) };
+});
+
+ipcMain.handle("confere:get-operation", async (_event, operationId: string) => {
+  if (!confereService) throw new Error("Confere service is not ready.");
+  return { status: "ok", operation: await confereService.summarizeOperation(operationId) };
+});
+
+ipcMain.handle("confere:get-confirmation-sheet", async (_event, operationId: string) => {
+  if (!confereService) throw new Error("Confere service is not ready.");
+  return confereService.getConfirmationSheet(operationId);
+});
+
+ipcMain.handle("confere:execute-approved-operation", async (_event, operationId: string) => {
+  if (!confereService) throw new Error("Confere service is not ready.");
+  return confereService.executeApprovedOperation({ operationId });
 });
 
 ipcMain.handle("confere:open-external", async (_event, url: string) => {
@@ -1823,6 +2159,7 @@ Create `harness/src/ui/api.ts`:
 import type {
   AgentTurnApiRequest,
   AgentTurnApiResponse,
+  ConfirmationSheetApiResponse,
   ConfereStatus,
   ExecuteOperationApiResponse,
   OperationListApiResponse,
@@ -1833,30 +2170,50 @@ let cachedBaseUrl: string | undefined;
 
 export async function getApiBaseUrl(): Promise<string> {
   if (cachedBaseUrl) return cachedBaseUrl;
-  cachedBaseUrl = window.confere
-    ? await window.confere.getApiBaseUrl()
-    : "http://127.0.0.1:3737";
+  cachedBaseUrl = "http://127.0.0.1:3737";
   return cachedBaseUrl;
 }
 
 export async function getStatus(): Promise<ConfereStatus> {
+  if (window.confere) return window.confere.getStatus();
   return getJson("/api/status");
 }
 
 export async function runAgentTurn(input: AgentTurnApiRequest): Promise<AgentTurnApiResponse> {
+  if (window.confere) return window.confere.runAgentTurn(input);
   return postJson("/api/agent/turn", input);
 }
 
 export async function executeOperation(operationId: string): Promise<ExecuteOperationApiResponse> {
-  return postJson(`/api/operations/${encodeURIComponent(operationId)}/execute`, {});
+  if (!window.confere) {
+    return {
+      status: "blocked",
+      reason: "Live execution is available only inside the Confere desktop shell."
+    };
+  }
+  return window.confere.executeApprovedOperation(operationId);
 }
 
 export async function listOperations(): Promise<OperationListApiResponse> {
+  if (window.confere) return window.confere.listOperations();
   return getJson("/api/operations?limit=50");
 }
 
 export async function getOperation(operationId: string): Promise<OperationSummaryApiResponse> {
+  if (window.confere) return window.confere.getOperation(operationId);
   return getJson(`/api/operations/${encodeURIComponent(operationId)}`);
+}
+
+export async function getConfirmationSheet(
+  operationId: string
+): Promise<ConfirmationSheetApiResponse> {
+  if (!window.confere) {
+    return {
+      status: "blocked",
+      reason: "Live confirmation is available only inside the Confere desktop shell."
+    };
+  }
+  return window.confere.getConfirmationSheet(operationId);
 }
 
 async function getJson<T>(path: string): Promise<T> {
@@ -2528,6 +2885,7 @@ Expected: commit contains home/session UI only.
 **Files:**
 - Create: `harness/src/ui/screens/WorkflowScreen.tsx`
 - Create: `harness/src/ui/components/OperationSummaryPanel.tsx`
+- Create: `harness/src/ui/components/ConfirmationSheet.tsx`
 - Modify: `harness/src/ui/App.tsx`
 - Modify: `harness/src/ui/styles.css`
 - Test: `harness/tests/ui/confere-ui.test.tsx`
@@ -2537,15 +2895,41 @@ Expected: commit contains home/session UI only.
 Add this test:
 
 ```tsx
+import { ConfirmationSheet } from "../../src/ui/components/ConfirmationSheet.js";
+
 it("renders workflow action language", () => {
   const html = renderToString(<App />);
 
   expect(html).toContain("Conta Azul");
   expect(html).toContain("Asaas");
 });
+
+it("renders the final confirmation sheet before live approval", () => {
+  const html = renderToString(
+    <ConfirmationSheet
+      onCancel={() => undefined}
+      onConfirm={() => undefined}
+      open
+      sheet={{
+        operationId: "op_demo",
+        toolName: "contaazul.create_service_sale_boleto_workflow",
+        tenantId: 3047702,
+        customerName: "Cliente Demonstração",
+        itemName: "Honorário Contábil",
+        value: "10,00",
+        dueDate: "30/06/2026",
+        warnings: ["Revise antes de executar."]
+      }}
+    />
+  );
+
+  expect(html).toContain("Confirmar execução real");
+  expect(html).toContain("Cliente Demonstração");
+  expect(html).toContain("Aprovar execução real");
+});
 ```
 
-This test stays broad because detailed workflow behavior depends on browser interaction. Backend tests cover the approval handoff contract.
+The workflow screen test stays broad because detailed interaction depends on browser events. The confirmation sheet render test pins the two-stage safety UI.
 
 - [ ] **Step 2: Add operation summary panel**
 
@@ -2558,7 +2942,7 @@ import { ActionButton } from "./ActionButton.js";
 export function OperationSummaryPanel(props: {
   operation?: OperationSummary;
   draftOperationId?: string;
-  onExecute?: () => void;
+  onReviewExecution?: () => void;
   executing?: boolean;
 }): JSX.Element {
   if (!props.operation && !props.draftOperationId) {
@@ -2603,17 +2987,113 @@ export function OperationSummaryPanel(props: {
       </dl>
       <ActionButton
         disabled={!props.draftOperationId || props.executing}
-        onClick={props.onExecute}
+        onClick={props.onReviewExecution}
         variant="primary"
       >
-        Aprovar execução real
+        Revisar execução real
       </ActionButton>
     </aside>
   );
 }
 ```
 
-- [ ] **Step 3: Add shared workflow screen**
+- [ ] **Step 3: Add final confirmation sheet**
+
+Create `harness/src/ui/components/ConfirmationSheet.tsx`:
+
+```tsx
+import type { ConfirmationSheetView } from "../../server/api-types.js";
+import { ActionButton } from "./ActionButton.js";
+
+export function ConfirmationSheet(props: {
+  open: boolean;
+  sheet?: ConfirmationSheetView;
+  busy?: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}): JSX.Element | null {
+  if (!props.open || !props.sheet) return null;
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section aria-modal="true" className="confirmation-sheet" role="dialog">
+        <header>
+          <p className="eyebrow">Aprovação final</p>
+          <h2>Confirmar execução real</h2>
+          <p>Revise os dados antes de autorizar a mutação no provedor.</p>
+        </header>
+        <dl className="summary-list">
+          <div>
+            <dt>Operação</dt>
+            <dd>{props.sheet.operationId}</dd>
+          </div>
+          <div>
+            <dt>Workflow</dt>
+            <dd>{props.sheet.toolName ?? "workflow"}</dd>
+          </div>
+          {props.sheet.tenantName || props.sheet.tenantId ? (
+            <div>
+              <dt>Empresa/Tenant</dt>
+              <dd>{props.sheet.tenantName ?? props.sheet.tenantId}</dd>
+            </div>
+          ) : null}
+          {props.sheet.customerName ? (
+            <div>
+              <dt>Cliente</dt>
+              <dd>{props.sheet.customerName}</dd>
+            </div>
+          ) : null}
+          {props.sheet.itemName ? (
+            <div>
+              <dt>Item</dt>
+              <dd>{props.sheet.itemName}</dd>
+            </div>
+          ) : null}
+          {props.sheet.description ? (
+            <div>
+              <dt>Descrição</dt>
+              <dd>{props.sheet.description}</dd>
+            </div>
+          ) : null}
+          {props.sheet.value ? (
+            <div>
+              <dt>Valor</dt>
+              <dd>{props.sheet.value}</dd>
+            </div>
+          ) : null}
+          {props.sheet.dueDate ? (
+            <div>
+              <dt>Vencimento</dt>
+              <dd>{props.sheet.dueDate}</dd>
+            </div>
+          ) : null}
+          {props.sheet.idempotencyKey ? (
+            <div>
+              <dt>Idempotência</dt>
+              <dd>{props.sheet.idempotencyKey}</dd>
+            </div>
+          ) : null}
+        </dl>
+        {props.sheet.warnings.length > 0 ? (
+          <div className="notice notice--danger">
+            {props.sheet.warnings.map((warning) => (
+              <p key={warning}>{warning}</p>
+            ))}
+          </div>
+        ) : null}
+        <footer className="confirmation-actions">
+          <ActionButton disabled={props.busy} onClick={props.onCancel}>Cancelar</ActionButton>
+          <ActionButton disabled={props.busy} onClick={props.onConfirm} variant="danger">
+            Aprovar execução real
+          </ActionButton>
+        </footer>
+      </section>
+    </div>
+  );
+}
+```
+
+- [ ] **Step 4: Add shared workflow screen**
 
 Create `harness/src/ui/screens/WorkflowScreen.tsx`:
 
@@ -2622,9 +3102,10 @@ import { Send } from "lucide-react";
 import { useState } from "react";
 
 import type { OperationSummary } from "../../core/operation-summary.js";
-import type { AgentTurnApiResponse } from "../../server/api-types.js";
-import { executeOperation, getOperation, runAgentTurn } from "../api.js";
+import type { AgentTurnApiResponse, ConfirmationSheetView } from "../../server/api-types.js";
+import { executeOperation, getConfirmationSheet, getOperation, runAgentTurn } from "../api.js";
 import { ActionButton } from "../components/ActionButton.js";
+import { ConfirmationSheet } from "../components/ConfirmationSheet.js";
 import { OperationSummaryPanel } from "../components/OperationSummaryPanel.js";
 
 export function WorkflowScreen(props: {
@@ -2636,12 +3117,16 @@ export function WorkflowScreen(props: {
   const [sessionId] = useState(() => `confere_${props.module}_${Date.now()}`);
   const [response, setResponse] = useState<AgentTurnApiResponse | undefined>();
   const [operation, setOperation] = useState<OperationSummary | undefined>();
+  const [confirmationSheet, setConfirmationSheet] = useState<ConfirmationSheetView | undefined>();
+  const [confirmOpen, setConfirmOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | undefined>();
 
   async function prepare(): Promise<void> {
     setBusy(true);
     setError(undefined);
+    setConfirmOpen(false);
+    setConfirmationSheet(undefined);
     try {
       const result = await runAgentTurn({
         request,
@@ -2670,9 +3155,29 @@ export function WorkflowScreen(props: {
         setError(executed.reason);
         return;
       }
-      if (executed.summary) setOperation(executed.summary);
+      setOperation(executed.operation);
+      setConfirmOpen(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Falha ao executar operação.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function reviewExecution(): Promise<void> {
+    if (!response?.draftOperationId) return;
+    setBusy(true);
+    setError(undefined);
+    try {
+      const sheetResponse = await getConfirmationSheet(response.draftOperationId);
+      if (sheetResponse.status === "blocked") {
+        setError(sheetResponse.reason);
+        return;
+      }
+      setConfirmationSheet(sheetResponse.sheet);
+      setConfirmOpen(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Falha ao carregar confirmação.");
     } finally {
       setBusy(false);
     }
@@ -2698,7 +3203,17 @@ export function WorkflowScreen(props: {
         {response ? (
           <div className="agent-output">
             <strong>Status do agente: {response.result.status}</strong>
-            <pre>{JSON.stringify(response.result, null, 2)}</pre>
+            <ul className="agent-facts">
+              {response.result.toolName ? <li>Workflow: {response.result.toolName}</li> : null}
+              {response.result.operationId ? <li>Operação: {response.result.operationId}</li> : null}
+              {response.result.summary ? <li>Resumo: {response.result.summary}</li> : null}
+              {response.result.missingFields.map((field) => (
+                <li key={field}>Campo pendente: {field}</li>
+              ))}
+              {response.result.questions.map((question) => (
+                <li key={question}>{question}</li>
+              ))}
+            </ul>
           </div>
         ) : null}
       </div>
@@ -2706,14 +3221,21 @@ export function WorkflowScreen(props: {
         draftOperationId={response?.draftOperationId}
         executing={busy}
         operation={operation}
-        onExecute={approve}
+        onReviewExecution={() => void reviewExecution()}
+      />
+      <ConfirmationSheet
+        busy={busy}
+        onCancel={() => setConfirmOpen(false)}
+        onConfirm={approve}
+        open={confirmOpen}
+        sheet={confirmationSheet}
       />
     </section>
   );
 }
 ```
 
-- [ ] **Step 4: Wire workflow screens**
+- [ ] **Step 5: Wire workflow screens**
 
 In `harness/src/ui/App.tsx`, import:
 
@@ -2740,7 +3262,7 @@ Replace the temporary Conta Azul and Asaas screen branches:
 ) : null}
 ```
 
-- [ ] **Step 5: Add workflow styles**
+- [ ] **Step 6: Add workflow styles**
 
 Append to `harness/src/ui/styles.css`:
 
@@ -2782,15 +3304,12 @@ Append to `harness/src/ui/styles.css`:
   padding: 14px;
 }
 
-.agent-output pre {
-  background: #f1f4f8;
-  border-radius: 8px;
-  color: #273244;
+.agent-facts {
+  color: #334155;
+  display: grid;
+  gap: 6px;
   margin: 12px 0 0;
-  max-height: 320px;
-  overflow: auto;
-  padding: 12px;
-  white-space: pre-wrap;
+  padding-left: 18px;
 }
 
 .summary-panel {
@@ -2826,9 +3345,45 @@ Append to `harness/src/ui/styles.css`:
   margin: 3px 0 0;
   overflow-wrap: anywhere;
 }
+
+.modal-backdrop {
+  align-items: center;
+  background: rgba(15, 23, 42, 0.36);
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  padding: 24px;
+  position: fixed;
+  z-index: 50;
+}
+
+.confirmation-sheet {
+  background: #ffffff;
+  border-radius: 8px;
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.22);
+  max-width: 560px;
+  padding: 22px;
+  width: 100%;
+}
+
+.confirmation-sheet h2 {
+  margin: 0 0 6px;
+}
+
+.confirmation-sheet header p:last-child {
+  color: #607086;
+  margin: 0 0 18px;
+}
+
+.confirmation-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 18px;
+}
 ```
 
-- [ ] **Step 6: Run UI tests**
+- [ ] **Step 7: Run UI tests**
 
 Run:
 
@@ -2839,7 +3394,7 @@ npm run test:ui -- tests/ui/confere-ui.test.tsx
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit workflow screens**
+- [ ] **Step 8: Commit workflow screens**
 
 Run:
 
@@ -3082,6 +3637,118 @@ it("keeps a draft when live mutations are disabled", async () => {
   expect(response.status).toBe("blocked");
   expect(service.getDraft("op_guard")).toMatchObject({ operationId: "op_guard" });
 });
+
+it("does not create a live draft for a high-risk plan without operator confirmation", async () => {
+  const registry = createToolRegistry();
+  registry.register({
+    name: "asaas.create_boleto_charge_workflow",
+    description: "workflow",
+    parameters: z.object({ customerName: z.string() }).passthrough(),
+    execute: async () => plannedReceipt("asaas.create_boleto_charge_workflow", "op_risk")
+  });
+  const service = await createConfereService({
+    cwd: await mkdtemp(path.join(os.tmpdir(), "confere-service-")),
+    env: { RUNTIME_MODE: "dry-run" },
+    registryFactory: async () => ({ registry, warnings: [] }),
+    modelProvider: createFakeModelProvider({
+      intent: "create_boleto_charge_workflow",
+      toolName: "asaas.create_boleto_charge_workflow",
+      params: { customerName: "Cliente Exemplo" },
+      missingFields: [],
+      questions: [],
+      risk: "high",
+      confidence: 0.5,
+      reason: "Plano incerto."
+    })
+  });
+
+  const response = await service.runAgentTurn({ request: "criar boleto", sessionId: "sess_risk" });
+
+  expect(response.draftOperationId).toBeUndefined();
+  expect(response.result).toMatchObject({
+    status: "needs_input",
+    missingFields: ["operatorConfirmation"],
+    approvalAvailable: false
+  });
+});
+
+it("does not create a live draft when the workflow dry-run blocks a duplicate", async () => {
+  const registry = createToolRegistry();
+  registry.register({
+    name: "contaazul.create_service_sale_boleto_workflow",
+    description: "workflow",
+    parameters: z.object({ tenantId: z.number() }).passthrough(),
+    execute: async () => ({
+      ...plannedReceipt("contaazul.create_service_sale_boleto_workflow", "op_duplicate"),
+      status: "blocked",
+      summary: "duplicate operation",
+      warnings: ["duplicate"]
+    })
+  });
+  const service = await createConfereService({
+    cwd: await mkdtemp(path.join(os.tmpdir(), "confere-service-")),
+    env: { RUNTIME_MODE: "dry-run" },
+    registryFactory: async () => ({ registry, warnings: [] }),
+    modelProvider: createFakeModelProvider({
+      intent: "create_service_sale_boleto_workflow",
+      toolName: "contaazul.create_service_sale_boleto_workflow",
+      params: { tenantId: 3047702 },
+      missingFields: [],
+      questions: [],
+      risk: "medium",
+      confidence: 0.9,
+      reason: "Dados completos."
+    })
+  });
+
+  const response = await service.runAgentTurn({ request: "criar venda Conta Azul", sessionId: "sess_dup" });
+
+  expect(response.draftOperationId).toBeUndefined();
+  expect(response.result).toMatchObject({
+    status: "executed",
+    receiptStatus: "blocked",
+    approvalAvailable: false
+  });
+});
+
+it("does not create a live draft for an orphaned partial failure", async () => {
+  const registry = createToolRegistry();
+  registry.register({
+    name: "contaazul.create_service_sale_boleto_workflow",
+    description: "workflow",
+    parameters: z.object({ tenantId: z.number() }).passthrough(),
+    execute: async () => ({
+      ...plannedReceipt("contaazul.create_service_sale_boleto_workflow", "op_orphan"),
+      status: "failed",
+      summary: "sale created but boleto failed",
+      warnings: ["manual cleanup required"]
+    })
+  });
+  const service = await createConfereService({
+    cwd: await mkdtemp(path.join(os.tmpdir(), "confere-service-")),
+    env: { RUNTIME_MODE: "dry-run" },
+    registryFactory: async () => ({ registry, warnings: [] }),
+    modelProvider: createFakeModelProvider({
+      intent: "create_service_sale_boleto_workflow",
+      toolName: "contaazul.create_service_sale_boleto_workflow",
+      params: { tenantId: 3047702 },
+      missingFields: [],
+      questions: [],
+      risk: "medium",
+      confidence: 0.9,
+      reason: "Dados completos."
+    })
+  });
+
+  const response = await service.runAgentTurn({ request: "criar venda Conta Azul", sessionId: "sess_orphan" });
+
+  expect(response.draftOperationId).toBeUndefined();
+  expect(response.result).toMatchObject({
+    status: "executed",
+    receiptStatus: "failed",
+    approvalAvailable: false
+  });
+});
 ```
 
 - [ ] **Step 2: Run service safety tests**
@@ -3143,12 +3810,14 @@ Append to `harness/docs/runbook.md`:
 
 Confere is the local desktop product layer over the harness.
 
-Run local API only:
+Run local API only for non-mutating debug/status checks:
 
 ```powershell
 cd harness
 npm run server:dev
 ```
+
+The local HTTP server must not expose live execution routes. Live approval exists only inside the Electron desktop shell through IPC.
 
 Run desktop app:
 
@@ -3166,14 +3835,17 @@ Demo flow:
 5. Click Preparar operação.
 6. Review the dry-run result and generated operation id.
 7. Enable live execution only for the controlled demo environment.
-8. Click Aprovar execução real.
-9. Open Operações and verify the resulting summary, PDF, link, warnings, and idempotency state.
+8. Click Revisar execução real.
+9. Review the final confirmation sheet with tenant/company, customer, value, due date, warnings, and idempotency state.
+10. Click Aprovar execução real.
+11. Open Operações and verify the resulting summary, PDF, link, warnings, and idempotency state.
 
 Safety rules:
 
 - The UI must never ask the model to call low-level tools.
 - Live execution must come from an active dry-run draft.
-- The approval button maps internally to `APROVAR <operationId>`.
+- The final approval button maps internally to `APROVAR <operationId>`.
+- Live execution must be reachable only through Electron IPC, never through local HTTP.
 - Do not reconstruct live params from the redacted ledger.
 - Do not expose provider secrets in the UI.
 - Do not use official APIs, official webhooks, or official MCPs from Asaas or Conta Azul.
@@ -3239,8 +3911,8 @@ Expected:
 - Confere window opens.
 - Sidebar shows Início, Conta Azul, Asaas, Operações, Sessões.
 - Sessões screen loads without showing secret values.
-- Conta Azul and Asaas screens accept text and call the local API.
-- Live approval button is disabled until a draft operation exists.
+- Conta Azul and Asaas screens accept text and call the Confere service through the preload IPC bridge.
+- Live approval remains unavailable until a draft operation exists and the confirmation sheet is reviewed.
 
 - [ ] **Step 7: Controlled provider demo smoke**
 
