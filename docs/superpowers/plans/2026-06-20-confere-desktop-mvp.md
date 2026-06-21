@@ -952,7 +952,10 @@ describe("confere service", () => {
         dueDateBr: z.string(),
         description: z.string()
       }),
-      execute: async () => plannedReceipt("asaas.create_boleto_charge_workflow", "op_agent")
+      execute: async () => ({
+        ...plannedReceipt("asaas.create_boleto_charge_workflow", "op_agent"),
+        summary: "Plano para Cliente Exemplo"
+      })
     });
 
     const service = await createConfereService({
@@ -1477,6 +1480,18 @@ function stringOrNumber(value: unknown): string | number | undefined {
   return stringValue(value);
 }
 
+function publicAgentSummary(status: string): string {
+  const summaries: Record<string, string> = {
+    planned: "Plano preparado para revisão.",
+    blocked: "Operação bloqueada pelo harness.",
+    failed: "Workflow falhou antes de liberar execução.",
+    succeeded: "Workflow concluído.",
+    running: "Workflow em execução.",
+    approved: "Operação aprovada."
+  };
+  return summaries[status] ?? "Resultado recebido do harness.";
+}
+
 function toAgentResultView(result: Awaited<ReturnType<typeof runAgentTurn>>) {
   if (result.status === "executed") {
     return {
@@ -1487,7 +1502,7 @@ function toAgentResultView(result: Awaited<ReturnType<typeof runAgentTurn>>) {
       toolName: result.receipt.toolName,
       operationId: result.receipt.operationId,
       receiptStatus: result.receipt.status,
-      summary: result.receipt.summary,
+      summary: publicAgentSummary(result.receipt.status),
       missingFields: [],
       questions: [],
       warnings: result.receipt.warnings,
