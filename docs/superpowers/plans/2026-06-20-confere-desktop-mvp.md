@@ -3954,14 +3954,13 @@ Run:
 
 ```powershell
 git status --short
-rg -n -i "claude|opus|anthropic|generated with|co-authored" harness docs
 rg -n "GEMINI_API_KEY\\s*=\\s*[^.]|GOOGLE_API_KEY\\s*=\\s*[^.]|AIza[0-9A-Za-z_-]+|AQ\\." harness docs --glob "!**/*.pdf"
 ```
 
 Expected:
 
 - `git status --short` shows only intended source/doc changes.
-- Both `rg` checks return no matches.
+- Secret scans return no matches. Also run the local authorship-marker scan configured outside the repository.
 
 - [ ] **Step 9: Commit runbook and verification**
 

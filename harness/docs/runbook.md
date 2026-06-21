@@ -235,3 +235,47 @@ Each new module should add:
 7. Endpoint rows in `docs/mapped-endpoints.md`
 
 Keep provider-specific behavior inside module tools. The orchestrator should route, ask questions, request approvals, and return receipts.
+
+## Confere Desktop MVP
+
+Confere is the local desktop product layer over the harness.
+
+Run local API only for non-mutating debug/status checks:
+
+```powershell
+cd harness
+npm run server:dev
+```
+
+The local HTTP server must not expose live execution routes. Live approval exists only inside the Electron desktop shell through IPC.
+
+Run desktop app:
+
+```powershell
+cd harness
+npm run desktop:dev
+```
+
+Demo flow:
+
+1. Open Confere.
+2. Confirm session status in Sessões.
+3. Open Conta Azul or Asaas.
+4. Enter a controlled request with known demo data.
+5. Click Preparar operação.
+6. Review the dry-run result and generated operation id.
+7. Enable live execution only for the controlled demo environment.
+8. Click Revisar execução real.
+9. Review the final confirmation sheet with tenant/company, customer, value, due date, warnings, and idempotency state.
+10. Click Aprovar execução real.
+11. Open Operações and verify the resulting summary, PDF, link, warnings, and idempotency state.
+
+Safety rules:
+
+- The UI must never ask the model to call low-level tools.
+- Live execution must come from an active dry-run draft.
+- The final approval button maps internally to `APROVAR <operationId>`.
+- Live execution must be reachable only through Electron IPC, never through local HTTP.
+- Do not reconstruct live params from the redacted ledger.
+- Do not expose provider secrets in the UI.
+- Do not use official APIs, official webhooks, or official MCPs from Asaas or Conta Azul.
