@@ -232,6 +232,166 @@ describe("confere service", () => {
     });
     expect(service.getDraft("op_low")).toMatchObject({ operationId: "op_low" });
   });
+
+  it("blocks live execution when no draft exists", async () => {
+    const service = await createConfereService({
+      cwd: await mkdtemp(path.join(os.tmpdir(), "confere-service-")),
+      env: { ALLOW_LIVE_MUTATIONS: "true" },
+      registryFactory: async () => ({ registry: createToolRegistry(), warnings: [] }),
+      modelProvider: createFakeModelProvider({})
+    });
+
+    const response = await service.executeApprovedOperation({ operationId: "missing" });
+
+    expect(response).toEqual({
+      status: "blocked",
+      reason: "No active dry-run draft found for operation: missing"
+    });
+  });
+
+  it("keeps a draft when live mutations are disabled", async () => {
+    const service = await createConfereService({
+      cwd: await mkdtemp(path.join(os.tmpdir(), "confere-service-")),
+      env: { ALLOW_LIVE_MUTATIONS: "false" },
+      registryFactory: async () => ({ registry: createToolRegistry(), warnings: [] }),
+      modelProvider: createFakeModelProvider({})
+    });
+    service.saveDraftForTest({
+      operationId: "op_guard",
+      toolName: "asaas.create_boleto_charge_workflow",
+      request: "criar boleto",
+      params: { customerName: "Cliente" },
+      createdAt: "2026-06-20T12:00:00.000Z"
+    });
+
+    const response = await service.executeApprovedOperation({ operationId: "op_guard" });
+
+    expect(response.status).toBe("blocked");
+    expect(service.getDraft("op_guard")).toMatchObject({ operationId: "op_guard" });
+  });
+
+  it("does not create a live draft for a high-risk plan without operator confirmation", async () => {
+    const registry = createToolRegistry();
+    registry.register({
+      name: "asaas.create_boleto_charge_workflow",
+      description: "workflow",
+      parameters: z.object({ customerName: z.string() }).passthrough(),
+      execute: async () => plannedReceipt("asaas.create_boleto_charge_workflow", "op_risk")
+    });
+    const service = await createConfereService({
+      cwd: await mkdtemp(path.join(os.tmpdir(), "confere-service-")),
+      env: { RUNTIME_MODE: "dry-run" },
+      registryFactory: async () => ({ registry, warnings: [] }),
+      modelProvider: createFakeModelProvider({
+        intent: "create_boleto_charge_workflow",
+        toolName: "asaas.create_boleto_charge_workflow",
+        params: {
+          customerName: "Cliente Exemplo",
+          valueBr: "120,00",
+          dueDateBr: "30/06/2026",
+          description: "Honorarios"
+        },
+        missingFields: [],
+        questions: [],
+        risk: "high",
+        confidence: 0.5,
+        reason: "Plano incerto."
+      })
+    });
+
+    const response = await service.runAgentTurn({ request: "criar boleto", sessionId: "sess_risk" });
+
+    expect(response.draftOperationId).toBeUndefined();
+    expect(response.result).toMatchObject({
+      status: "needs_input",
+      missingFields: ["operatorConfirmation"],
+      approvalAvailable: false
+    });
+  });
+
+  it("does not create a live draft when the workflow dry-run blocks a duplicate", async () => {
+    const registry = createToolRegistry();
+    registry.register({
+      name: "contaazul.create_service_sale_boleto_workflow",
+      description: "workflow",
+      parameters: z.object({ tenantId: z.number() }).passthrough(),
+      execute: async () => ({
+        ...plannedReceipt("contaazul.create_service_sale_boleto_workflow", "op_duplicate"),
+        status: "blocked",
+        summary: "duplicate operation",
+        warnings: ["duplicate"]
+      })
+    });
+    const service = await createConfereService({
+      cwd: await mkdtemp(path.join(os.tmpdir(), "confere-service-")),
+      env: { RUNTIME_MODE: "dry-run" },
+      registryFactory: async () => ({ registry, warnings: [] }),
+      modelProvider: createFakeModelProvider({
+        intent: "create_service_sale_boleto_workflow",
+        toolName: "contaazul.create_service_sale_boleto_workflow",
+        params: completeContaAzulParams(),
+        missingFields: [],
+        questions: [],
+        risk: "medium",
+        confidence: 0.9,
+        reason: "Dados completos."
+      })
+    });
+
+    const response = await service.runAgentTurn({
+      request: "criar venda Conta Azul",
+      sessionId: "sess_dup"
+    });
+
+    expect(response.draftOperationId).toBeUndefined();
+    expect(response.result).toMatchObject({
+      status: "executed",
+      receiptStatus: "blocked",
+      approvalAvailable: false
+    });
+  });
+
+  it("does not create a live draft for an orphaned partial failure", async () => {
+    const registry = createToolRegistry();
+    registry.register({
+      name: "contaazul.create_service_sale_boleto_workflow",
+      description: "workflow",
+      parameters: z.object({ tenantId: z.number() }).passthrough(),
+      execute: async () => ({
+        ...plannedReceipt("contaazul.create_service_sale_boleto_workflow", "op_orphan"),
+        status: "failed",
+        summary: "sale created but boleto failed",
+        warnings: ["manual cleanup required"]
+      })
+    });
+    const service = await createConfereService({
+      cwd: await mkdtemp(path.join(os.tmpdir(), "confere-service-")),
+      env: { RUNTIME_MODE: "dry-run" },
+      registryFactory: async () => ({ registry, warnings: [] }),
+      modelProvider: createFakeModelProvider({
+        intent: "create_service_sale_boleto_workflow",
+        toolName: "contaazul.create_service_sale_boleto_workflow",
+        params: completeContaAzulParams(),
+        missingFields: [],
+        questions: [],
+        risk: "medium",
+        confidence: 0.9,
+        reason: "Dados completos."
+      })
+    });
+
+    const response = await service.runAgentTurn({
+      request: "criar venda Conta Azul",
+      sessionId: "sess_orphan"
+    });
+
+    expect(response.draftOperationId).toBeUndefined();
+    expect(response.result).toMatchObject({
+      status: "executed",
+      receiptStatus: "failed",
+      approvalAvailable: false
+    });
+  });
 });
 
 function plannedReceipt(toolName: string, operationId: string): ToolReceipt {
@@ -245,5 +405,20 @@ function plannedReceipt(toolName: string, operationId: string): ToolReceipt {
     data: { approvalPreview: { operationId } },
     artifacts: [],
     warnings: []
+  };
+}
+
+function completeContaAzulParams(): Record<string, unknown> {
+  return {
+    tenantId: 3047702,
+    customerName: "Cliente Exemplo",
+    categoryName: "Honorário contábil mensal",
+    itemName: "Honorário Contábil",
+    serviceDescription: "Honorário mensal",
+    unitValueBr: "10,00",
+    dueDateBr: "30/06/2026",
+    notification: {
+      email: "cliente@example.test"
+    }
   };
 }

@@ -67,4 +67,10 @@ describe("Confere UI", () => {
     expect(html).toContain("Histórico auditável");
     expect(html).toContain("Ledger redigido");
   });
+
+  it("renders approval as a human gated action", () => {
+    const html = renderToString(<App />);
+
+    expect(html).toContain("aprovação humana");
+  });
 });
