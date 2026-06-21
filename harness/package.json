@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "main": "out/main/main.js",
   "scripts": {
     "dev": "tsx src/cli.ts",
     "server:dev": "tsx src/server/dev-server.ts",

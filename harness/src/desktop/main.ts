@@ -22,10 +22,14 @@ async function createWindow(): Promise<void> {
     title: "Confere",
     backgroundColor: "#f7f8fb",
     webPreferences: {
-      preload: path.join(__dirname, "../preload/preload.js"),
+      preload: path.join(__dirname, "../preload/preload.mjs"),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true
+      // Sandbox disabled because the ESM (.mjs) preload emitted by electron-vite
+      // cannot run in a sandboxed renderer. The renderer only loads local bundled
+      // content (no remote/untrusted web), so contextIsolation + nodeIntegration:false
+      // remain the effective boundary keeping Node out of the renderer.
+      sandbox: false
     }
   });
 
