@@ -174,3 +174,85 @@ h1 {
   border-color: #a52828;
   color: #ffffff;
 }
+
+.screen-header {
+  align-items: flex-start;
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 24px;
+}
+
+.module-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(280px, 1fr));
+  gap: 14px;
+  margin: 24px 0;
+}
+
+.module-tile {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid #dce1e8;
+  border-radius: 8px;
+  color: #18202f;
+  cursor: pointer;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 32px minmax(0, 1fr) 24px;
+  min-height: 96px;
+  padding: 18px;
+  text-align: left;
+}
+
+.module-tile strong,
+.module-tile span {
+  grid-column: 2;
+}
+
+.module-tile span {
+  color: #607086;
+}
+
+.status-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(180px, 1fr));
+  gap: 12px;
+  margin: 20px 0;
+}
+
+.metric-panel {
+  background: #ffffff;
+  border: 1px solid #dce1e8;
+  border-radius: 8px;
+  padding: 14px;
+}
+
+.metric-panel span {
+  color: #607086;
+  display: block;
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+
+.metric-panel strong {
+  color: #18202f;
+  font-size: 14px;
+}
+
+.notice {
+  border-radius: 8px;
+  margin: 18px 0;
+  padding: 12px 14px;
+}
+
+.notice--danger {
+  background: #ffe1e1;
+  color: #8a1f1f;
+}
+
+.warning-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}

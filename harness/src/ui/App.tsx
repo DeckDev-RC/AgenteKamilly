@@ -2,6 +2,8 @@ import { useState } from "react";
 import type { ReactElement } from "react";
 
 import { AppShell } from "./components/AppShell.js";
+import { HomeScreen } from "./screens/HomeScreen.js";
+import { SessionsScreen } from "./screens/SessionsScreen.js";
 import type { ScreenId } from "./types.js";
 
 export function App(): ReactElement {
@@ -9,24 +11,21 @@ export function App(): ReactElement {
 
   return (
     <AppShell activeScreen={screen} onNavigate={setScreen}>
-      <section className="screen">
-        <p className="eyebrow">Confere</p>
-        <h1>{titleForScreen(screen)}</h1>
-        <p className="screen-lead">
-          Operação local com agente em dry-run, aprovação humana e histórico auditável.
-        </p>
-      </section>
+      {screen === "home" ? <HomeScreen onNavigate={setScreen} /> : null}
+      {screen === "sessoes" ? <SessionsScreen /> : null}
+      {screen === "contaazul" ? <Placeholder title="Conta Azul" /> : null}
+      {screen === "asaas" ? <Placeholder title="Asaas" /> : null}
+      {screen === "operacoes" ? <Placeholder title="Operações" /> : null}
     </AppShell>
   );
 }
 
-function titleForScreen(screen: ScreenId): string {
-  const titles: Record<ScreenId, string> = {
-    home: "Início",
-    contaazul: "Conta Azul",
-    asaas: "Asaas",
-    operacoes: "Operações",
-    sessoes: "Sessões"
-  };
-  return titles[screen];
+function Placeholder(props: { title: string }): ReactElement {
+  return (
+    <section className="screen">
+      <p className="eyebrow">Confere</p>
+      <h1>{props.title}</h1>
+      <p className="screen-lead">Fluxo operacional em preparação.</p>
+    </section>
+  );
 }

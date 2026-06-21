@@ -13,4 +13,12 @@ describe("Confere UI", () => {
     expect(html).toContain("Operações");
     expect(html).toContain("Sessões");
   });
+
+  it("renders home status language without secret values", () => {
+    const html = renderToString(<App />);
+
+    expect(html).toContain("Modo de operação");
+    expect(html).toContain("Quota do modelo");
+    expect(html).not.toContain("GEMINI_API_KEY");
+  });
 });
