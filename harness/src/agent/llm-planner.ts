@@ -151,7 +151,9 @@ export async function planAgentTurn(input: AgentTurnInput): Promise<AgentTurnRes
     };
   }
 
-  const plan = withKnownParams(normalizePlanAliases(parsedPlan.data), input.knownParams ?? {});
+  const plan = withKnownRequiredMissingFields(
+    withKnownParams(normalizePlanAliases(parsedPlan.data), input.knownParams ?? {})
+  );
   const tool = input.registry.list().find((definition) => definition.name === plan.toolName);
   if (!tool) {
     return {
@@ -251,7 +253,9 @@ function normalizePlanAliases(plan: AgentPlan): AgentPlan {
   return {
     ...plan,
     params: normalizeParamAliases(plan.toolName, plan.params),
-    missingFields: plan.missingFields.map((field) => normalizeFieldAlias(plan.toolName, field))
+    missingFields: uniqueStrings(
+      plan.missingFields.map((field) => normalizeFieldAlias(plan.toolName, field))
+    )
   };
 }
 
@@ -266,15 +270,85 @@ function withKnownParams(plan: AgentPlan, knownParams: Record<string, unknown>):
   return {
     ...plan,
     params,
-    missingFields: plan.missingFields.filter((field) => !hasParam(params, field))
+    missingFields: uniqueStrings(plan.missingFields.filter((field) => !hasParam(params, field)))
   };
 }
 
 function hasParam(params: Record<string, unknown>, field: string): boolean {
-  const value = params[field];
+  const value = getParamByPath(params, field);
   if (isRedactedPlaceholder(value)) return false;
   if (typeof value === "string") return value.trim().length > 0;
   return value !== undefined && value !== null;
+}
+
+function getParamByPath(params: Record<string, unknown>, field: string): unknown {
+  if (!field.includes(".")) return params[field];
+  let current: unknown = params;
+  for (const segment of field.split(".")) {
+    if (!current || typeof current !== "object" || Array.isArray(current)) return undefined;
+    current = (current as Record<string, unknown>)[segment];
+  }
+  return current;
+}
+
+function withKnownRequiredMissingFields(plan: AgentPlan): AgentPlan {
+  const missingFields = [...plan.missingFields];
+  for (const requirement of requiredFieldGroupsForTool(plan.toolName)) {
+    if (requirement.fields.some((field) => hasParam(plan.params, field))) continue;
+    const missingField = requirement.preferredField;
+    if (!missingFields.includes(missingField)) missingFields.push(missingField);
+  }
+
+  const addedFields = missingFields.filter((field) => !plan.missingFields.includes(field));
+  return {
+    ...plan,
+    missingFields: uniqueStrings(missingFields),
+    questions: [...plan.questions, ...addedFields.map(questionForField)]
+  };
+}
+
+function requiredFieldGroupsForTool(
+  toolName: string
+): Array<{ preferredField: string; fields: string[] }> {
+  if (toolName === "asaas.create_boleto_charge_workflow") {
+    return [
+      { preferredField: "customerName", fields: ["customerName"] },
+      { preferredField: "valueBr", fields: ["valueBr"] },
+      { preferredField: "dueDateBr", fields: ["dueDateBr"] },
+      { preferredField: "description", fields: ["description"] }
+    ];
+  }
+
+  if (toolName === "contaazul.create_service_sale_boleto_workflow") {
+    return [
+      { preferredField: "tenantId", fields: ["tenantId"] },
+      { preferredField: "customerName", fields: ["customerName"] },
+      { preferredField: "categoryName", fields: ["categoryName"] },
+      { preferredField: "itemName", fields: ["itemName"] },
+      { preferredField: "serviceDescription", fields: ["serviceDescription"] },
+      { preferredField: "unitValueBr", fields: ["unitValueBr", "unitValue"] },
+      { preferredField: "dueDateBr", fields: ["dueDateBr", "dueDateIso"] },
+      { preferredField: "notification.email", fields: ["notification.email"] }
+    ];
+  }
+
+  return [];
+}
+
+function questionForField(field: string): string {
+  const questions: Record<string, string> = {
+    customerName: "Qual o nome do cliente?",
+    valueBr: "Qual o valor?",
+    dueDateBr: "Qual a data de vencimento em DD/MM/AAAA?",
+    description: "Qual a descricao?",
+    tenantId: "Qual o tenantId da empresa no Conta Azul Mais?",
+    categoryName: "Qual a categoria financeira?",
+    itemName: "Qual o item de servico?",
+    serviceDescription: "Qual a descricao do servico?",
+    unitValueBr: "Qual o valor unitario?",
+    "notification.email": "Qual o e-mail de cobranca do cliente?"
+  };
+  return questions[field] ?? `Informe ${field}.`;
 }
 
 function removeRedactedPlaceholders(value: unknown): Record<string, unknown> {
@@ -320,7 +394,10 @@ function normalizeFieldAlias(toolName: string, field: string): string {
   }
 
   if (toolName === "contaazul.create_service_sale_boleto_workflow") {
-    if (["value", "amount", "valor", "unitvalue", "valor unitario"].includes(normalized)) {
+    if (
+      ["value", "valuebr", "amount", "valor", "unitvalue", "unitvaluebr", "valor unitario"]
+        .includes(normalized)
+    ) {
       return "unitValueBr";
     }
     if (["duedate", "vencimento", "data vencimento"].includes(normalized)) return "dueDateBr";
@@ -330,7 +407,10 @@ function normalizeFieldAlias(toolName: string, field: string): string {
   }
 
   if (toolName === "contaazul.create_service_sale_and_issue_boleto") {
-    if (["value", "amount", "valor", "unitvalue", "valor unitario"].includes(normalized)) {
+    if (
+      ["value", "valuebr", "amount", "valor", "unitvalue", "unitvaluebr", "valor unitario"]
+        .includes(normalized)
+    ) {
       return "unitValue";
     }
     if (["duedate", "vencimento", "data vencimento"].includes(normalized)) return "dueDateIso";
@@ -369,6 +449,10 @@ function mentionsForbiddenOfficialIntegration(request: string): boolean {
 
 function hasAny(request: string, terms: string[]): boolean {
   return terms.some((term) => request.includes(normalize(term)));
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return Array.from(new Set(values));
 }
 
 function normalize(value: string): string {

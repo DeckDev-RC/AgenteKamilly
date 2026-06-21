@@ -138,7 +138,12 @@ describe("agent runner", () => {
       provider: createFakeModelProvider({
         intent: "create_boleto_charge_workflow",
         toolName: "asaas.create_boleto_charge_workflow",
-        params: { customerName: "Cliente Exemplo" },
+        params: {
+          customerName: "Cliente Exemplo",
+          valueBr: "120,00",
+          dueDateBr: "30/06/2026",
+          description: "Honorarios"
+        },
         missingFields: [],
         questions: [],
         risk: "high",
@@ -162,7 +167,12 @@ describe("agent runner", () => {
     registry.register({
       name: "asaas.create_boleto_charge_workflow",
       description: "Resolve customer and plan boleto creation.",
-      parameters: z.object({ customerName: z.string() }).strict(),
+      parameters: z.object({
+        customerName: z.string(),
+        valueBr: z.string(),
+        dueDateBr: z.string(),
+        description: z.string()
+      }).strict(),
       execute: async (params) => {
         calls.push(params);
         return receipt("asaas.create_boleto_charge_workflow");
@@ -175,7 +185,12 @@ describe("agent runner", () => {
       provider: createFakeModelProvider({
         intent: "create_boleto_charge_workflow",
         toolName: "asaas.create_boleto_charge_workflow",
-        params: { customerName: "Cliente Exemplo" },
+        params: {
+          customerName: "Cliente Exemplo",
+          valueBr: "120,00",
+          dueDateBr: "30/06/2026",
+          description: "Honorarios"
+        },
         missingFields: [],
         questions: [],
         risk: "high",
@@ -194,7 +209,14 @@ describe("agent runner", () => {
         toolName: "asaas.create_boleto_charge_workflow"
       }
     });
-    expect(calls).toEqual([{ customerName: "Cliente Exemplo" }]);
+    expect(calls).toEqual([
+      {
+        customerName: "Cliente Exemplo",
+        valueBr: "120,00",
+        dueDateBr: "30/06/2026",
+        description: "Honorarios"
+      }
+    ]);
   });
 
   it("accepts the CONFIRMAR AGENTE request token as operator confirmation", async () => {
@@ -203,7 +225,12 @@ describe("agent runner", () => {
     const provider = createFakeModelProvider({
       intent: "create_boleto_charge_workflow",
       toolName: "asaas.create_boleto_charge_workflow",
-      params: { customerName: "Cliente Exemplo" },
+      params: {
+        customerName: "Cliente Exemplo",
+        valueBr: "120,00",
+        dueDateBr: "30/06/2026",
+        description: "Honorarios"
+      },
       missingFields: [],
       questions: [],
       risk: "high",

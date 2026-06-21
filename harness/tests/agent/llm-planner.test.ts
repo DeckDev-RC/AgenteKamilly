@@ -24,7 +24,18 @@ describe("LLM agent planner", () => {
     const provider = createFakeModelProvider({
       intent: "create_service_sale_boleto_workflow",
       toolName: "contaazul.create_service_sale_boleto_workflow",
-      params: { customerName: "AZUOS ASSESSORIA CONTABIL LTDA" },
+      params: {
+        tenantId: 3047702,
+        customerName: "AZUOS ASSESSORIA CONTABIL LTDA",
+        categoryName: "Honorario contabil mensal",
+        itemName: "Honorario Contabil",
+        serviceDescription: "Honorario mensal",
+        unitValueBr: "10,00",
+        dueDateBr: "30/06/2026",
+        notification: {
+          email: "cliente@example.test"
+        }
+      },
       missingFields: [],
       questions: [],
       risk: "medium",
@@ -44,7 +55,10 @@ describe("LLM agent planner", () => {
       model: "fake-model",
       plan: {
         toolName: "contaazul.create_service_sale_boleto_workflow",
-        params: { customerName: "AZUOS ASSESSORIA CONTABIL LTDA" },
+        params: {
+          customerName: "AZUOS ASSESSORIA CONTABIL LTDA",
+          tenantId: 3047702
+        },
         missingFields: [],
         risk: "medium"
       }
@@ -79,7 +93,7 @@ describe("LLM agent planner", () => {
     const provider = createFakeModelProvider({
       intent: "create_boleto_charge_workflow",
       toolName: "asaas.create_boleto_charge_workflow",
-      params: { customerName: "Cliente Exemplo" },
+      params: { customerName: "Cliente Exemplo", description: "Honorarios" },
       missingFields: ["valueBr", "dueDateBr"],
       questions: ["Qual valor do boleto?", "Qual vencimento?"],
       risk: "low",
@@ -165,7 +179,18 @@ describe("LLM agent planner", () => {
       provider: createFakeModelProvider({
         intent: "create_service_sale_boleto_workflow",
         toolName: "contaazul.create_service_sale_boleto_workflow",
-        params: {},
+        params: {
+          tenantId: 3047702,
+          customerName: "Cliente Exemplo",
+          categoryName: "Honorario contabil mensal",
+          itemName: "Honorario Contabil",
+          serviceDescription: "Honorario mensal",
+          unitValueBr: "10,00",
+          dueDateBr: "30/06/2026",
+          notification: {
+            email: "cliente@example.test"
+          }
+        },
         missingFields: [],
         questions: [],
         risk: "medium",
@@ -215,6 +240,85 @@ describe("LLM agent planner", () => {
     });
   });
 
+  it("deduplicates Conta Azul value aliases in missing fields", async () => {
+    const registry = createToolRegistry();
+    registry.register({
+      name: "contaazul.create_service_sale_boleto_workflow",
+      description: "Resolve a Conta Azul service sale and boleto workflow.",
+      parameters: z.object({ customerName: z.string() }).passthrough(),
+      execute: async () => ({})
+    });
+
+    const result = await planAgentTurn({
+      request: "criar venda de servico no Conta Azul",
+      registry,
+      provider: createFakeModelProvider({
+        intent: "create_service_sale_boleto_workflow",
+        toolName: "contaazul.create_service_sale_boleto_workflow",
+        params: {
+          tenantId: 3047702,
+          customerName: "Cliente Exemplo",
+          categoryName: "Honorario contabil mensal",
+          itemName: "Honorario Contabil",
+          serviceDescription: "Honorario mensal",
+          notification: {
+            email: "cliente@example.test"
+          }
+        },
+        missingFields: ["valueBr", "unitValueBr", "dueDate"],
+        questions: ["Qual o valor total?", "Qual o valor unitario?", "Qual vencimento?"],
+        risk: "low",
+        confidence: 0.8,
+        reason: "Faltam dados financeiros."
+      })
+    });
+
+    expect(result).toMatchObject({
+      status: "needs_input",
+      missingFields: ["unitValueBr", "dueDateBr"]
+    });
+  });
+
+  it("adds known Conta Azul workflow required fields missing from the model plan", async () => {
+    const registry = createToolRegistry();
+    registry.register({
+      name: "contaazul.create_service_sale_boleto_workflow",
+      description: "Resolve a Conta Azul service sale and boleto workflow.",
+      parameters: z.object({ customerName: z.string() }).passthrough(),
+      execute: async () => ({})
+    });
+
+    const result = await planAgentTurn({
+      request: "criar venda de servico no Conta Azul",
+      registry,
+      provider: createFakeModelProvider({
+        intent: "create_service_sale_boleto_workflow",
+        toolName: "contaazul.create_service_sale_boleto_workflow",
+        params: {
+          customerName: "Cliente Exemplo",
+          itemName: "Honorario Contabil",
+          unitValueBr: "10,00",
+          dueDateBr: "30/06/2026"
+        },
+        missingFields: ["categoryName", "serviceDescription"],
+        questions: ["Qual categoria?", "Qual descricao?"],
+        risk: "low",
+        confidence: 0.8,
+        reason: "Faltam alguns dados."
+      })
+    });
+
+    expect(result).toMatchObject({
+      status: "needs_input",
+      missingFields: [
+        "categoryName",
+        "serviceDescription",
+        "tenantId",
+        "notification.email"
+      ]
+    });
+  });
+
   it("blocks invalid model JSON before any tool can be selected", async () => {
     const result = await planAgentTurn({
       request: "criar boleto",
@@ -258,7 +362,12 @@ describe("LLM agent planner", () => {
       provider: createFakeModelProvider({
         intent: "create_boleto_charge_workflow",
         toolName: "asaas.create_boleto_charge_workflow",
-        params: { customerName: "Cliente Exemplo" },
+        params: {
+          customerName: "Cliente Exemplo",
+          valueBr: "120,00",
+          dueDateBr: "30/06/2026",
+          description: "Honorarios"
+        },
         missingFields: [],
         questions: [],
         risk: "medio",

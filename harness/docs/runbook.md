@@ -92,6 +92,14 @@ npm run dev -- --agent --operator "criar boleto no Asaas para Cliente Exemplo" -
 
 `CONFIRMAR AGENTE` by itself is rejected; include the full business request after the prefix.
 
+Agent-to-live handoff:
+
+- Agent mode stays `dry-run`; do not run `--agent --live`.
+- When an agent dry-run executes a workflow and returns a planned receipt, the operator output includes the operation id and exact approval text: `APROVAR <operationId>`.
+- To execute live through the hardened manual flow, repeat the same business request/params in the normal CLI with `--live`, include the same `operationId` in `--params`, and pass `--approval "APROVAR <operationId>"`.
+- Do not reconstruct live params from the ledger. Ledger entries are redacted by design and may not contain full e-mail/phone/session-sensitive values.
+- A future automatic handoff should use a protected local draft store, not the redacted ledger, if the product needs one-click live continuation.
+
 Only workflow-level tools are exposed to the model:
 
 - `asaas.create_boleto_charge_workflow`
