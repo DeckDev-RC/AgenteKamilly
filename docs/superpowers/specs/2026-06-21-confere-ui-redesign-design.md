@@ -74,7 +74,7 @@ Reuse `src/ui/api.ts` and the API types untouched. Recompose the views:
 
 ## Mascot Assets
 
-The design assumes the Pixelyn sprite sheet (idle / working / happy / holding-boleto / calendar / customer+). For the first implementation, `PixelynAvatar` may use a CSS/SVG approximation behind a stable `state` prop so swapping in real sprites later is a one-file change. Exporting the sprite states is a prerequisite to confirm with the user (see Open Questions).
+The Pixelyn avatar is **built in code (CSS/SVG) by the implementer** for v1 — no dependency on an external sprite export. `PixelynAvatar` exposes a stable `state` prop, so exported sprite art can replace the CSS/SVG internals later without touching any consumer. The reference character guides the look (orange body, cream face panel, antenna with a small cross, blush, simple expressions per state). A subtle **idle animation** (breathing + occasional blink) ships in v1 to sell the "alive" feel; other states use light transitions/affordances (e.g., a progress bar while Trabalhando).
 
 ## Visual Direction
 
@@ -91,7 +91,7 @@ Finance OS claro: light surfaces, restrained color, clear status pills, generous
 - **`lib/pixelynState.ts`** gets pure unit tests mapping each result shape → expected state.
 - **Backend contract tests unchanged** — the `confere-service`/IPC tests already cover the safety gates.
 
-## Open Questions
+## Resolved Decisions
 
-1. **Sprite sheet export** — can the Pixelyn states (and optional contextual poses) be exported as assets for v1, or do we ship the CSS/SVG fallback first and swap later?
-2. **Idle animation** — a subtle "breathing"/blink to sell *alive* in v1, or defer to a polish phase?
+1. **Mascot rendering** — built in code (CSS/SVG) by the implementer for v1, behind a stable `state` prop. Exported sprite art can swap in later with no consumer changes. No external asset export blocks v1.
+2. **Idle animation** — in scope for v1: a subtle breathing + occasional blink on the avatar.
