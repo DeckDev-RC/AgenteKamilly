@@ -33,4 +33,14 @@ describe("CLI args", () => {
       outputMode: "json"
     });
   });
+
+  it("parses agent session ids", () => {
+    const args = parseCliArgs(["--agent", "--session", "sess_001", "continuar"]);
+
+    expect(args).toMatchObject({
+      agentMode: true,
+      agentSessionId: "sess_001",
+      request: "continuar"
+    });
+  });
 });

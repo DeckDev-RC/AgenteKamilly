@@ -1,10 +1,12 @@
 import type { ModelProvider, ModelRequest, ModelResponse } from "./model-provider.js";
+import type { ModelUsageSnapshot, ModelUsageStore } from "./model-usage-store.js";
 
 export type RateLimitOptions = {
   maxRpm: number;
   maxDailyRequests: number;
   maxInputTpm: number;
   now?: () => number;
+  usageStore?: ModelUsageStore;
 };
 
 export function createRateLimitedModelProvider(
@@ -12,6 +14,7 @@ export function createRateLimitedModelProvider(
   options: RateLimitOptions
 ): ModelProvider {
   const now = options.now ?? Date.now;
+  const scope = `${wrapped.name}:${wrapped.model}`;
   const requestTimestamps: number[] = [];
   const inputTokenEvents: Array<{ timestamp: number; tokens: number }> = [];
   let dailyKey = pacificDateKey(now());
@@ -21,6 +24,14 @@ export function createRateLimitedModelProvider(
     name: wrapped.name,
     model: wrapped.model,
     async generateText(input: ModelRequest): Promise<ModelResponse> {
+      const stored = await options.usageStore?.load(scope);
+      if (stored) {
+        dailyKey = stored.dailyKey;
+        dailyRequests = stored.dailyRequests;
+        replaceArray(requestTimestamps, stored.requestTimestamps);
+        replaceArray(inputTokenEvents, stored.inputTokenEvents);
+      }
+
       const currentTime = now();
       const currentDailyKey = pacificDateKey(currentTime);
       if (currentDailyKey !== dailyKey) {
@@ -47,10 +58,24 @@ export function createRateLimitedModelProvider(
       requestTimestamps.push(currentTime);
       inputTokenEvents.push({ timestamp: currentTime, tokens: inputTokens });
       dailyRequests++;
+      await options.usageStore?.save(scope, snapshot());
 
       return wrapped.generateText(input);
     }
   };
+
+  function snapshot(): ModelUsageSnapshot {
+    return {
+      dailyKey,
+      dailyRequests,
+      requestTimestamps: [...requestTimestamps],
+      inputTokenEvents: [...inputTokenEvents]
+    };
+  }
+}
+
+function replaceArray<T>(target: T[], source: T[]): void {
+  target.splice(0, target.length, ...source);
 }
 
 function estimateInputTokens(input: ModelRequest): number {

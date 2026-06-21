@@ -30,7 +30,7 @@ describe("Gemini model provider", () => {
     globalThis.fetch = fetchMock as typeof fetch;
 
     const provider = createGeminiModelProvider({
-      apiKey: "AIza-secret-test",
+      apiKey: "test-api-key",
       model: "gemini-3-flash-preview"
     });
 
@@ -46,8 +46,51 @@ describe("Gemini model provider", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchCalls[0]?.url).toContain("/models/gemini-3-flash-preview:generateContent");
     expect(JSON.stringify(JSON.parse(String(fetchCalls[0]?.init?.body)))).not.toContain(
-      "AIza-secret-test"
+      "test-api-key"
     );
+  });
+
+  it("passes a response schema to Gemini when requested", async () => {
+    const fetchCalls: Array<{ init?: RequestInit }> = [];
+    globalThis.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      fetchCalls.push({ init });
+      return new Response(
+        JSON.stringify({
+          candidates: [{ content: { parts: [{ text: "{}" }] } }]
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }) as typeof fetch;
+
+    const provider = createGeminiModelProvider({
+      apiKey: "test-api-key",
+      model: "gemini-3-flash-preview"
+    });
+
+    await provider.generateText({
+      messages: [{ role: "user", content: "planeje" }],
+      responseSchema: {
+        type: "object",
+        properties: {
+          toolName: { type: "string" }
+        },
+        required: ["toolName"]
+      }
+    });
+
+    const body = JSON.parse(String(fetchCalls[0]?.init?.body)) as Record<string, unknown>;
+    expect(body).toMatchObject({
+      generationConfig: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: "object",
+          properties: {
+            toolName: { type: "string" }
+          },
+          required: ["toolName"]
+        }
+      }
+    });
   });
 
   it("reports Gemini API errors without leaking the API key", async () => {
@@ -64,7 +107,7 @@ describe("Gemini model provider", () => {
     ) as typeof fetch;
 
     const provider = createGeminiModelProvider({
-      apiKey: "AIza-secret-test",
+      apiKey: "test-api-key",
       model: "gemini-3-flash-preview"
     });
 
@@ -78,6 +121,6 @@ describe("Gemini model provider", () => {
       provider.generateText({
         messages: [{ role: "user", content: "teste" }]
       })
-    ).rejects.not.toThrow("AIza-secret-test");
+    ).rejects.not.toThrow("test-api-key");
   });
 });

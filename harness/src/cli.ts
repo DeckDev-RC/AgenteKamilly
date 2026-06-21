@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 
 import { config as loadDotenv } from "dotenv";
-import { planAgentTurn } from "./agent/llm-planner.js";
+import { runAgentTurn } from "./agent/agent-runner.js";
 import { createAgentModelProvider } from "./agent/model-provider-factory.js";
 import { planOrchestratorTurn, registerHarnessTools } from "./agent/orchestrator.js";
 import { parseCliArgs, type CliArgs } from "./cli-args.js";
@@ -75,17 +75,26 @@ async function main(): Promise<void> {
   const warnings: string[] = [];
   const registry = await createDefaultMappedToolRegistry(config, warnings);
   if (args.agentMode) {
-    const provider = createAgentModelProvider(config);
-    const result = await planAgentTurn({
-      request: args.request,
-      registry,
-      provider
-    });
+    const result = config.runtimeMode === "dry-run"
+      ? await runAgentTurn({
+          request: args.request,
+          registry,
+          provider: createAgentModelProvider(config),
+          runtimeMode: config.runtimeMode,
+          params: args.params,
+          sessionId: args.agentSessionId,
+          sessionsDir: config.agentSessionsDir
+        })
+      : {
+          status: "blocked" as const,
+          reason:
+            "Agent mode currently supports dry-run only. Use the normal harness approval flow for live execution."
+        };
     const output = {
       request: args.request,
       runtimeMode: config.runtimeMode,
       allowLiveMutations: config.allowLiveMutations,
-      status: "agent-planner-ready",
+      status: "agent-runner-ready",
       warnings,
       result
     };
@@ -222,7 +231,7 @@ function formatAgentTurnOutput(output: {
   allowLiveMutations: boolean;
   status: string;
   warnings: string[];
-  result: Awaited<ReturnType<typeof planAgentTurn>>;
+  result: Awaited<ReturnType<typeof runAgentTurn>>;
 }): string {
   const lines = [
     `Status: ${output.result.status}`,
@@ -254,12 +263,32 @@ function formatAgentTurnOutput(output: {
     return lines.join("\n");
   }
 
+  if (output.result.status === "executed") {
+    const receipt = output.result.receipt;
+    lines.push(`Tool: ${receipt.toolName}`);
+    lines.push(`Operacao: ${receipt.operationId}`);
+    lines.push(`Resultado: ${receipt.status}`);
+    lines.push(`Resumo: ${receipt.summary}`);
+    if (receipt.status === "planned") {
+      const data = asRecord(receipt.data);
+      const preview = asRecord(data?.approvalPreview);
+      const approvalOperationId =
+        typeof preview?.operationId === "string" ? preview.operationId : receipt.operationId;
+      lines.push(`Aprovacao: APROVAR ${approvalOperationId}`);
+    }
+    if (receipt.warnings.length > 0) {
+      lines.push("Warnings:");
+      for (const warning of receipt.warnings) lines.push(`- ${warning}`);
+    }
+    return lines.join("\n");
+  }
+
   lines.push(`Tool: ${output.result.plan.toolName}`);
   lines.push(`Intent: ${output.result.plan.intent}`);
   lines.push(`Risco: ${output.result.plan.risk}`);
   lines.push(`Confianca: ${output.result.plan.confidence}`);
   lines.push(`Motivo: ${output.result.plan.reason}`);
-  lines.push("Execucao: nenhuma; plano dry-run aguardando roteador/workflow seguro.");
+  lines.push("Execucao: nenhuma; plano dry-run aguardando workflow seguro.");
   return lines.join("\n");
 }
 

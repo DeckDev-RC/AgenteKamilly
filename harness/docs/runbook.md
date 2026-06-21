@@ -48,6 +48,8 @@ AGENT_MODEL_NAME=gemini-3-flash-preview
 AGENT_MODEL_MAX_RPM=4
 AGENT_MODEL_MAX_DAILY_REQUESTS=100
 AGENT_MODEL_MAX_INPUT_TPM=100000
+AGENT_SESSIONS_DIR=artifacts/agent/sessions
+AGENT_MODEL_USAGE_PATH=artifacts/agent/model-usage.json
 ```
 
 Validate model access without loading provider sessions:
@@ -62,7 +64,22 @@ Use the planner in dry-run mode:
 npm run dev -- --agent --operator "criar boleto no Asaas para Cliente Exemplo"
 ```
 
-Expected result is either `needs_input`, `planned`, or `blocked`. A `planned` agent result is still not a provider execution; use the normal harness workflow command with params/approval to produce receipts and live operations.
+Use a short-lived session to keep fields collected over multiple turns:
+
+```powershell
+npm run dev -- --agent --session sess_boleto_001 --operator "criar boleto no Asaas para Cliente Exemplo"
+npm run dev -- --agent --session sess_boleto_001 --operator "valor 120,00, vencimento 30/06/2026, descricao Honorarios"
+```
+
+Expected result is `needs_input`, `executed`, or `blocked`. `executed` in agent mode means the selected workflow tool ran through the harness in `dry-run` and returned a planned receipt; it does not allow live provider mutations. Agent mode is intentionally blocked when runtime mode is `live`.
+
+Only workflow-level tools are exposed to the model:
+
+- `asaas.create_boleto_charge_workflow`
+- `contaazul.create_service_sale_boleto_workflow`
+- `contaazul.acknowledge_orphan_cleanup`
+
+Model usage counters are persisted in `AGENT_MODEL_USAGE_PATH` by provider/model/day so a restarted process does not bypass the local RPM/TPM/RPD guard.
 
 Conta Azul service-sale workflow by names:
 

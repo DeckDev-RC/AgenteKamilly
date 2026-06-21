@@ -6,6 +6,7 @@ export type CliArgs = {
   outputMode?: "json" | "operator";
   summaryOperationId?: string;
   agentMode?: boolean;
+  agentSessionId?: string;
   modelSmoke?: boolean;
   verbose?: boolean;
 };
@@ -17,6 +18,7 @@ export function parseCliArgs(argv: string[]): CliArgs {
   let approvalText: string | undefined;
   let outputMode: "json" | "operator" | undefined;
   let summaryOperationId: string | undefined;
+  let agentSessionId: string | undefined;
   let agentMode = false;
   let modelSmoke = false;
   let verbose = false;
@@ -25,6 +27,11 @@ export function parseCliArgs(argv: string[]): CliArgs {
     const arg = argv[index];
     if (arg === "--agent") {
       agentMode = true;
+      continue;
+    }
+    if (arg === "--session") {
+      agentSessionId = argv[++index];
+      if (!agentSessionId) throw new Error("Missing value for --session");
       continue;
     }
     if (arg === "--model-smoke") {
@@ -83,6 +90,7 @@ export function parseCliArgs(argv: string[]): CliArgs {
     approvalText,
     outputMode,
     summaryOperationId,
+    agentSessionId,
     agentMode,
     modelSmoke,
     verbose

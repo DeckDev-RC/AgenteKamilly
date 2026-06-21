@@ -1,6 +1,11 @@
+import { mkdtemp } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import { createRateLimitedModelProvider } from "../../src/agent/rate-limited-model-provider.js";
+import { createJsonFileModelUsageStore } from "../../src/agent/model-usage-store.js";
 import type { ModelProvider, ModelRequest, ModelResponse } from "../../src/agent/model-provider.js";
 
 describe("rate-limited model provider", () => {
@@ -50,6 +55,34 @@ describe("rate-limited model provider", () => {
       "Agent model input TPM limit exceeded"
     );
     expect(wrapped.calls).toHaveLength(0);
+  });
+
+  it("persists daily request usage across provider instances", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "harness-model-usage-"));
+    const usageStore = createJsonFileModelUsageStore(path.join(dir, "usage.json"));
+
+    const firstWrapped = createCountingProvider();
+    const first = createRateLimitedModelProvider(firstWrapped, {
+      maxRpm: 10,
+      maxDailyRequests: 1,
+      maxInputTpm: 1000,
+      usageStore
+    });
+
+    await first.generateText(message("primeira"));
+
+    const secondWrapped = createCountingProvider();
+    const second = createRateLimitedModelProvider(secondWrapped, {
+      maxRpm: 10,
+      maxDailyRequests: 1,
+      maxInputTpm: 1000,
+      usageStore
+    });
+
+    await expect(second.generateText(message("segunda"))).rejects.toThrow(
+      "Agent model daily request limit exceeded"
+    );
+    expect(secondWrapped.calls).toHaveLength(0);
   });
 });
 

@@ -1,3 +1,6 @@
+import os from "node:os";
+import path from "node:path";
+
 import { describe, expect, it, vi } from "vitest";
 
 import { createAgentModelProvider } from "../../src/agent/model-provider-factory.js";
@@ -43,9 +46,14 @@ function config(): HarnessConfig {
     allowLiveMutations: false,
     agentModelProvider: "gemini",
     agentModelName: "gemini-3-flash-preview",
-    geminiApiKey: "AIza-test",
+    geminiApiKey: "test-api-key",
     agentModelMaxRpm: 10,
     agentModelMaxDailyRequests: 1,
-    agentModelMaxInputTpm: 1000
+    agentModelMaxInputTpm: 1000,
+    agentSessionsDir: path.join(os.tmpdir(), `harness-agent-sessions-${process.pid}`),
+    agentModelUsagePath: path.join(
+      os.tmpdir(),
+      `harness-model-provider-factory-${process.pid}-${Date.now()}.json`
+    )
   };
 }

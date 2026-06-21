@@ -53,7 +53,8 @@ export function createGeminiModelProvider(options: GeminiModelProviderOptions): 
             contents: toGeminiContents(input.messages),
             generationConfig: {
               temperature: 0.2,
-              responseMimeType: "application/json"
+              responseMimeType: "application/json",
+              ...(input.responseSchema ? { responseSchema: input.responseSchema } : {})
             }
           }),
           signal: controller.signal

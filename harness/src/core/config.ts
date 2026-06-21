@@ -20,6 +20,8 @@ export type HarnessConfig = {
   agentModelMaxRpm: number;
   agentModelMaxDailyRequests: number;
   agentModelMaxInputTpm: number;
+  agentSessionsDir: string;
+  agentModelUsagePath: string;
 };
 
 type Env = Record<string, string | undefined>;
@@ -46,7 +48,15 @@ export function loadHarnessConfig(env: Env = process.env, cwd = process.cwd()): 
     geminiApiKey: env.GEMINI_API_KEY ?? env.GOOGLE_API_KEY ?? "",
     agentModelMaxRpm: parsePositiveInteger(env.AGENT_MODEL_MAX_RPM, 4),
     agentModelMaxDailyRequests: parsePositiveInteger(env.AGENT_MODEL_MAX_DAILY_REQUESTS, 100),
-    agentModelMaxInputTpm: parsePositiveInteger(env.AGENT_MODEL_MAX_INPUT_TPM, 100000)
+    agentModelMaxInputTpm: parsePositiveInteger(env.AGENT_MODEL_MAX_INPUT_TPM, 100000),
+    agentSessionsDir: resolveHarnessPath(
+      cwd,
+      env.AGENT_SESSIONS_DIR ?? path.join(artifactsDir, "agent", "sessions")
+    ),
+    agentModelUsagePath: resolveHarnessPath(
+      cwd,
+      env.AGENT_MODEL_USAGE_PATH ?? path.join(artifactsDir, "agent", "model-usage.json")
+    )
   };
 }
 

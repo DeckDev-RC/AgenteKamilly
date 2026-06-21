@@ -50,6 +50,21 @@ describe("LLM agent planner", () => {
       }
     });
     expect(executed).toBe(false);
+    expect(provider.calls[0]?.responseSchema).toMatchObject({
+      type: "object",
+      properties: {
+        toolName: { type: "string" },
+        params: {
+          type: "object",
+          properties: {
+            customerName: { type: "string" },
+            valueBr: { type: "string" },
+            dueDateBr: { type: "string" }
+          }
+        }
+      },
+      required: expect.arrayContaining(["intent", "toolName", "params"])
+    });
   });
 
   it("asks only for missing fields reported by a valid model plan", async () => {
@@ -126,6 +141,21 @@ describe("LLM agent planner", () => {
     expect(result).toMatchObject({
       status: "blocked",
       reason: expect.stringContaining("valid JSON")
+    });
+  });
+
+  it("blocks provider errors without throwing a CLI stack trace", async () => {
+    const provider = createFakeThrowingProvider(new Error("Gemini API request failed: 400"));
+
+    const result = await planAgentTurn({
+      request: "criar boleto",
+      registry: createToolRegistry(),
+      provider
+    });
+
+    expect(result).toMatchObject({
+      status: "blocked",
+      reason: expect.stringContaining("Model provider failed")
     });
   });
 
@@ -212,6 +242,19 @@ function createFakeTextProvider(text: string): ModelProvider & { calls: ModelReq
     async generateText(input: ModelRequest): Promise<ModelResponse> {
       calls.push(input);
       return { provider: "gemini", model: "fake-model", text };
+    }
+  };
+}
+
+function createFakeThrowingProvider(error: Error): ModelProvider & { calls: ModelRequest[] } {
+  const calls: ModelRequest[] = [];
+  return {
+    name: "gemini",
+    model: "fake-model",
+    calls,
+    async generateText(input: ModelRequest): Promise<ModelResponse> {
+      calls.push(input);
+      throw error;
     }
   };
 }

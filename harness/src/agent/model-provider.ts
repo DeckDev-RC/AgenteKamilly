@@ -1,5 +1,9 @@
 export type ModelProviderName = "gemini";
 
+export type JsonSchema = {
+  [key: string]: unknown;
+};
+
 export type ModelMessage = {
   role: "system" | "user" | "assistant";
   content: string;
@@ -8,6 +12,7 @@ export type ModelMessage = {
 export type ModelRequest = {
   messages: ModelMessage[];
   timeoutMs?: number;
+  responseSchema?: JsonSchema;
 };
 
 export type ModelResponse = {

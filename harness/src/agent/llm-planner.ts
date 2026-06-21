@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 import type { ToolRegistry } from "../core/tool-registry.js";
-import type { ModelProvider } from "./model-provider.js";
+import type { JsonSchema, ModelProvider } from "./model-provider.js";
 
 const RiskSchema = z.preprocess((value) => {
   if (typeof value !== "string") return value;
@@ -27,10 +27,61 @@ const AgentPlanSchema = z.object({
 
 export type AgentPlan = z.output<typeof AgentPlanSchema>;
 
+export const AGENT_PLAN_RESPONSE_SCHEMA: JsonSchema = {
+  type: "object",
+  properties: {
+    intent: { type: "string" },
+    toolName: { type: "string" },
+    params: {
+      type: "object",
+      properties: {
+        customerName: { type: "string" },
+        customerId: { type: "string" },
+        valueBr: { type: "string" },
+        dueDateBr: { type: "string" },
+        description: { type: "string" },
+        tenantId: { type: "number" },
+        categoryName: { type: "string" },
+        itemName: { type: "string" },
+        serviceDescription: { type: "string" },
+        unitValueBr: { type: "string" },
+        previousOperationId: { type: "string" },
+        orphanedSaleId: { type: "string" },
+        cleanupAction: { type: "string" },
+        notification: {
+          type: "object",
+          properties: {
+            email: { type: "string" },
+            phone: { type: "string" },
+            replyTo: { type: "string" },
+            companyDisplayName: { type: "string" }
+          }
+        }
+      }
+    },
+    missingFields: {
+      type: "array",
+      items: { type: "string" }
+    },
+    questions: {
+      type: "array",
+      items: { type: "string" }
+    },
+    risk: {
+      type: "string",
+      enum: ["low", "medium", "high"]
+    },
+    confidence: { type: "number" },
+    reason: { type: "string" }
+  },
+  required: ["intent", "toolName", "params", "missingFields", "questions", "risk", "confidence", "reason"]
+};
+
 export type AgentTurnInput = {
   request: string;
   registry: ToolRegistry;
   provider: ModelProvider;
+  knownParams?: Record<string, unknown>;
 };
 
 export type AgentTurnResult =
@@ -68,12 +119,21 @@ export async function planAgentTurn(input: AgentTurnInput): Promise<AgentTurnRes
     };
   }
 
-  const modelResponse = await input.provider.generateText({
-    messages: [
-      { role: "system", content: buildSystemPrompt(input.registry) },
-      { role: "user", content: input.request }
-    ]
-  });
+  let modelResponse;
+  try {
+    modelResponse = await input.provider.generateText({
+      messages: [
+        { role: "system", content: buildSystemPrompt(input.registry) },
+        { role: "user", content: buildUserPrompt(input.request, input.knownParams) }
+      ],
+      responseSchema: AGENT_PLAN_RESPONSE_SCHEMA
+    });
+  } catch (error) {
+    return {
+      status: "blocked",
+      reason: `Model provider failed: ${error instanceof Error ? error.message : "unknown model error"}`
+    };
+  }
 
   const parsedJson = parseModelJson(modelResponse.text);
   if (!parsedJson.ok) {
@@ -91,7 +151,7 @@ export async function planAgentTurn(input: AgentTurnInput): Promise<AgentTurnRes
     };
   }
 
-  const plan = normalizePlanAliases(parsedPlan.data);
+  const plan = withKnownParams(normalizePlanAliases(parsedPlan.data), input.knownParams ?? {});
   const tool = input.registry.list().find((definition) => definition.name === plan.toolName);
   if (!tool) {
     return {
@@ -153,12 +213,41 @@ function buildSystemPrompt(registry: ToolRegistry): string {
   ].join("\n");
 }
 
+function buildUserPrompt(request: string, knownParams: Record<string, unknown> | undefined): string {
+  if (!knownParams || Object.keys(knownParams).length === 0) return request;
+  return [
+    request,
+    "",
+    "Campos ja coletados nesta conversa. Reutilize estes campos se forem relevantes:",
+    JSON.stringify(knownParams)
+  ].join("\n");
+}
+
 function normalizePlanAliases(plan: AgentPlan): AgentPlan {
   return {
     ...plan,
     params: normalizeParamAliases(plan.toolName, plan.params),
     missingFields: plan.missingFields.map((field) => normalizeFieldAlias(plan.toolName, field))
   };
+}
+
+function withKnownParams(plan: AgentPlan, knownParams: Record<string, unknown>): AgentPlan {
+  const normalizedKnownParams = normalizeParamAliases(plan.toolName, knownParams);
+  const params = {
+    ...normalizedKnownParams,
+    ...plan.params
+  };
+  return {
+    ...plan,
+    params,
+    missingFields: plan.missingFields.filter((field) => !hasParam(params, field))
+  };
+}
+
+function hasParam(params: Record<string, unknown>, field: string): boolean {
+  const value = params[field];
+  if (typeof value === "string") return value.trim().length > 0;
+  return value !== undefined && value !== null;
 }
 
 function normalizeParamAliases(
