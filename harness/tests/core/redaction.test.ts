@@ -8,6 +8,7 @@ describe("redaction", () => {
       Cookie: "sid=secret-session",
       Authorization: "Bearer secret-token",
       "x-authorization": "private-pro-token",
+      "x-goog-api-key": "gemini-key",
       "accountancy-token": "private-accountancy-token",
       "Content-Type": "application/json"
     });
@@ -16,6 +17,7 @@ describe("redaction", () => {
       Cookie: "[REDACTED_SECRET]",
       Authorization: "[REDACTED_SECRET]",
       "x-authorization": "[REDACTED_SECRET]",
+      "x-goog-api-key": "[REDACTED_SECRET]",
       "accountancy-token": "[REDACTED_SECRET]",
       "Content-Type": "application/json"
     });

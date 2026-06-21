@@ -51,6 +51,23 @@ export async function runAgentTurn(input: AgentRunInput): Promise<AgentRunResult
   await persistSessionForResult(input, session, planned, knownParams);
 
   if (planned.status !== "planned") return planned;
+  if (requiresOperatorConfirmation(planned.plan)) {
+    return {
+      status: "needs_input",
+      provider: planned.provider,
+      model: planned.model,
+      intent: planned.plan.intent,
+      toolName: planned.plan.toolName,
+      params: planned.plan.params,
+      missingFields: ["operatorConfirmation"],
+      questions: [
+        `Plano com risco ${planned.plan.risk} e confianca ${planned.plan.confidence}. Informe se devo confirmar o dry-run desta workflow.`
+      ],
+      risk: planned.plan.risk,
+      confidence: planned.plan.confidence,
+      reason: planned.plan.reason
+    };
+  }
 
   const tool = safeRegistry.list().find((definition) => definition.name === planned.plan.toolName);
   if (!tool) {
@@ -100,4 +117,8 @@ function paramsFromResult(result: AgentRunResult): Record<string, unknown> {
   if (result.status === "planned" || result.status === "executed") return result.plan.params;
   if (result.status === "needs_input") return result.params;
   return {};
+}
+
+function requiresOperatorConfirmation(plan: AgentPlan): boolean {
+  return plan.risk === "high" || plan.confidence < 0.7;
 }

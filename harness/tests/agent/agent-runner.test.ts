@@ -119,6 +119,43 @@ describe("agent runner", () => {
     });
   });
 
+  it("requires operator confirmation before executing high-risk or low-confidence plans", async () => {
+    const registry = createToolRegistry();
+    let executed = false;
+    registry.register({
+      name: "asaas.create_boleto_charge_workflow",
+      description: "Resolve customer and plan boleto creation.",
+      parameters: z.object({ customerName: z.string() }).passthrough(),
+      execute: async () => {
+        executed = true;
+        return receipt("asaas.create_boleto_charge_workflow");
+      }
+    });
+
+    const result = await runAgentTurn({
+      request: "criar boleto no Asaas",
+      registry,
+      provider: createFakeModelProvider({
+        intent: "create_boleto_charge_workflow",
+        toolName: "asaas.create_boleto_charge_workflow",
+        params: { customerName: "Cliente Exemplo" },
+        missingFields: [],
+        questions: [],
+        risk: "high",
+        confidence: 0.6,
+        reason: "Plano incerto."
+      }),
+      runtimeMode: "dry-run"
+    });
+
+    expect(result).toMatchObject({
+      status: "needs_input",
+      missingFields: ["operatorConfirmation"],
+      questions: [expect.stringContaining("confirmar")]
+    });
+    expect(executed).toBe(false);
+  });
+
   it("persists collected slots and reuses them on the next session turn", async () => {
     const sessionsDir = await mkdtemp(path.join(os.tmpdir(), "harness-agent-runner-"));
     const registry = createToolRegistry();

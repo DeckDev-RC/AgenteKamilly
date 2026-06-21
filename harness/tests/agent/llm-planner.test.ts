@@ -101,6 +101,90 @@ describe("LLM agent planner", () => {
     });
   });
 
+  it("sends only known field names to the model, not previously collected values", async () => {
+    const registry = createToolRegistry();
+    registry.register({
+      name: "contaazul.create_service_sale_boleto_workflow",
+      description: "Resolve Conta Azul workflow.",
+      parameters: z.object({}).passthrough(),
+      execute: async () => ({})
+    });
+
+    const provider = createFakeModelProvider({
+      intent: "create_service_sale_boleto_workflow",
+      toolName: "contaazul.create_service_sale_boleto_workflow",
+      params: { dueDateBr: "30/06/2026" },
+      missingFields: [],
+      questions: [],
+      risk: "medium",
+      confidence: 0.9,
+      reason: "Campos restantes recebidos."
+    });
+
+    await planAgentTurn({
+      request: "usar vencimento 30/06/2026",
+      registry,
+      provider,
+      knownParams: {
+        customerName: "AZUOS ASSESSORIA CONTABIL LTDA",
+        notification: {
+          email: "cliente@example.test",
+          phone: "62991514384",
+          replyTo: "financeiro@example.test"
+        }
+      }
+    });
+
+    const prompt = provider.calls[0]?.messages.map((message) => message.content).join("\n") ?? "";
+    expect(prompt).toContain("knownFields");
+    expect(prompt).toContain("customerName");
+    expect(prompt).toContain("notification.email");
+    expect(prompt).toContain("notification.phone");
+    expect(prompt).not.toContain("AZUOS ASSESSORIA");
+    expect(prompt).not.toContain("cliente@example.test");
+    expect(prompt).not.toContain("62991514384");
+    expect(prompt).not.toContain("financeiro@example.test");
+  });
+
+  it("does not reuse redacted placeholders as workflow params", async () => {
+    const registry = createToolRegistry();
+    registry.register({
+      name: "contaazul.create_service_sale_boleto_workflow",
+      description: "Resolve Conta Azul workflow.",
+      parameters: z.object({
+        notification: z.object({
+          phone: z.string()
+        })
+      }),
+      execute: async () => ({})
+    });
+
+    const result = await planAgentTurn({
+      request: "continuar",
+      registry,
+      provider: createFakeModelProvider({
+        intent: "create_service_sale_boleto_workflow",
+        toolName: "contaazul.create_service_sale_boleto_workflow",
+        params: {},
+        missingFields: [],
+        questions: [],
+        risk: "medium",
+        confidence: 0.9,
+        reason: "Continuar com campos locais."
+      }),
+      knownParams: {
+        notification: {
+          phone: "[REDACTED_PHONE]"
+        }
+      }
+    });
+
+    expect(result).toMatchObject({
+      status: "blocked",
+      reason: expect.stringContaining("params failed tool validation")
+    });
+  });
+
   it("normalizes common missing-field aliases to registered tool field names", async () => {
     const registry = createToolRegistry();
     registry.register({

@@ -39,6 +39,16 @@ Use `--operator` for concise human-readable status. Use `--json` for full machin
 
 The optional agent planner uses a cloud model only to choose a registered workflow tool, extract params, and ask for missing fields. It never executes provider mutations directly. Low-level mapped HTTP tools are kept behind the harness registry and existing approval/idempotency gates.
 
+Do not use agent mode with real customer personal, confidential, or financial data on unpaid Gemini API quota. Google states that Unpaid Services may use submitted content and generated responses to improve products and that sensitive, confidential, or personal information should not be submitted to Unpaid Services. For real customer operations, use a Cloud Project with active billing/paid terms or an enterprise endpoint such as Vertex/Gemini Enterprise, and document the LGPD basis, processor terms, retention, and operator authorization.
+
+Privacy controls in this harness:
+
+- Previously collected session fields are sent to Gemini as field names only, not as raw values.
+- New values typed in the current request still go to the model so it can extract them; operators must avoid entering real PII unless the model endpoint and legal basis are approved.
+- Agent mode stays dry-run only.
+- Local agent session files redact contact/document fields at rest, but can still contain operational business fields such as customer names, values, dates, categories, and descriptions.
+- Model usage counters are local only and do not contain prompt text.
+
 Minimum `.env` entries:
 
 ```env
@@ -72,6 +82,8 @@ npm run dev -- --agent --session sess_boleto_001 --operator "valor 120,00, venci
 ```
 
 Expected result is `needs_input`, `executed`, or `blocked`. `executed` in agent mode means the selected workflow tool ran through the harness in `dry-run` and returned a planned receipt; it does not allow live provider mutations. Agent mode is intentionally blocked when runtime mode is `live`.
+
+High-risk or low-confidence model plans are converted to `needs_input` and require operator confirmation before even the dry-run workflow executes.
 
 Only workflow-level tools are exposed to the model:
 

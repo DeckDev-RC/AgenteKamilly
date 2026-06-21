@@ -218,9 +218,33 @@ function buildUserPrompt(request: string, knownParams: Record<string, unknown> |
   return [
     request,
     "",
-    "Campos ja coletados nesta conversa. Reutilize estes campos se forem relevantes:",
-    JSON.stringify(knownParams)
+    "Campos ja coletados nesta conversa. Reutilize apenas a presenca destes campos; os valores permanecem locais no harness:",
+    JSON.stringify({ knownFields: collectKnownFieldPaths(knownParams) })
   ].join("\n");
+}
+
+function collectKnownFieldPaths(value: Record<string, unknown>): string[] {
+  const paths: string[] = [];
+  collectPaths(value, "", paths);
+  return paths.sort();
+}
+
+function collectPaths(value: unknown, prefix: string, paths: string[]): void {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    if (prefix) paths.push(prefix);
+    return;
+  }
+
+  const entries = Object.entries(value as Record<string, unknown>);
+  if (entries.length === 0 && prefix) paths.push(prefix);
+  for (const [key, entryValue] of entries) {
+    const path = prefix ? `${prefix}.${key}` : key;
+    if (entryValue && typeof entryValue === "object" && !Array.isArray(entryValue)) {
+      collectPaths(entryValue, path, paths);
+    } else {
+      paths.push(path);
+    }
+  }
 }
 
 function normalizePlanAliases(plan: AgentPlan): AgentPlan {
@@ -232,7 +256,9 @@ function normalizePlanAliases(plan: AgentPlan): AgentPlan {
 }
 
 function withKnownParams(plan: AgentPlan, knownParams: Record<string, unknown>): AgentPlan {
-  const normalizedKnownParams = normalizeParamAliases(plan.toolName, knownParams);
+  const normalizedKnownParams = removeRedactedPlaceholders(
+    normalizeParamAliases(plan.toolName, knownParams)
+  );
   const params = {
     ...normalizedKnownParams,
     ...plan.params
@@ -246,8 +272,28 @@ function withKnownParams(plan: AgentPlan, knownParams: Record<string, unknown>):
 
 function hasParam(params: Record<string, unknown>, field: string): boolean {
   const value = params[field];
+  if (isRedactedPlaceholder(value)) return false;
   if (typeof value === "string") return value.trim().length > 0;
   return value !== undefined && value !== null;
+}
+
+function removeRedactedPlaceholders(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+
+  const output: Record<string, unknown> = {};
+  for (const [key, entryValue] of Object.entries(value as Record<string, unknown>)) {
+    if (isRedactedPlaceholder(entryValue)) continue;
+    if (entryValue && typeof entryValue === "object" && !Array.isArray(entryValue)) {
+      output[key] = removeRedactedPlaceholders(entryValue);
+      continue;
+    }
+    output[key] = entryValue;
+  }
+  return output;
+}
+
+function isRedactedPlaceholder(value: unknown): boolean {
+  return typeof value === "string" && /^\[REDACTED_[A-Z_]+\]$/.test(value);
 }
 
 function normalizeParamAliases(

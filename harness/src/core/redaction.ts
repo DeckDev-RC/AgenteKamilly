@@ -7,6 +7,7 @@ const SENSITIVE_HEADER_NAMES = new Set([
   "cookie",
   "authorization",
   "x-authorization",
+  "x-goog-api-key",
   "x-auth-token",
   "accountancy-token",
   "auth-token",

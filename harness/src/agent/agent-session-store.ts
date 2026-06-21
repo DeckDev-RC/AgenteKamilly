@@ -1,6 +1,8 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+import { redact } from "../core/redaction.js";
+
 export type AgentSession = {
   sessionId: string;
   createdAt: string;
@@ -48,9 +50,18 @@ export async function saveAgentSession(options: {
   await mkdir(path.dirname(sessionPath), { recursive: true });
   await writeFile(
     sessionPath,
-    `${JSON.stringify({ ...options.session, updatedAt: new Date().toISOString() }, null, 2)}\n`,
+    `${JSON.stringify(redactSessionForStorage(options.session), null, 2)}\n`,
     "utf8"
   );
+}
+
+function redactSessionForStorage(session: AgentSession): AgentSession {
+  return {
+    ...session,
+    updatedAt: new Date().toISOString(),
+    slots: redact(session.slots) as Record<string, unknown>,
+    lastPlan: session.lastPlan === undefined ? undefined : redact(session.lastPlan)
+  };
 }
 
 function resolveSessionPath(options: AgentSessionStoreOptions): string {
