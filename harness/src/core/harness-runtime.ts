@@ -29,7 +29,8 @@ export function resolveConfigCwd(cwd = process.cwd()): string {
 }
 
 export async function createDefaultMappedToolRegistry(
-  config: HarnessConfig
+  config: HarnessConfig,
+  proSessionStore: Map<string, string> = new Map<string, string>()
 ): Promise<RuntimeRegistryResult> {
   const warnings: string[] = [];
   const registry = createToolRegistry();
@@ -68,7 +69,6 @@ export async function createDefaultMappedToolRegistry(
         warnings.push(`${health.reason} ${health.recaptureCommand ?? ""}`.trim());
       } else {
         const contaAzulClient = new MappedContaAzulSessionClient({ state });
-        const proSessionStore = new Map<string, string>();
         const contaAzulMutationOptions = {
           client: contaAzulClient,
           ledgerPath: config.ledgerPath,

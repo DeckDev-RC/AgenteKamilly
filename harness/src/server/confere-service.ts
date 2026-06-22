@@ -70,7 +70,14 @@ export async function createConfereService(
   const cwd = resolveConfigCwd(options.cwd ?? process.cwd());
   loadDotenv({ path: path.resolve(cwd, ".env"), override: false, quiet: true });
   const baseEnv = { ...process.env, ...(options.env ?? {}) };
-  const registryFactory = options.registryFactory ?? createDefaultMappedToolRegistry;
+  // Persist Pro-session tokens across agent turns. runtime() rebuilds the tool
+  // registry every turn, so without a shared store the session switched on the
+  // tenant-selection turn is gone by the search turn (search would block as
+  // "Pro session not available"). One store, reused by every per-turn registry.
+  const proSessionStore = new Map<string, string>();
+  const registryFactory =
+    options.registryFactory ??
+    ((config: HarnessConfig) => createDefaultMappedToolRegistry(config, proSessionStore));
   const draftStore = options.draftStore ?? createDraftStore();
   const interactiveFlowStore = createInteractiveFlowStore();
 
@@ -94,8 +101,6 @@ export async function createConfereService(
     return { config, registry, warnings };
   }
 
-  const proSessionTokens = new Map<string, string>();
-
   async function getContaAzulClient() {
     const config = loadConfig("dry-run");
     const state = await loadBrowserState(config.contaAzulStatePath);
@@ -107,12 +112,12 @@ export async function createConfereService(
   }
 
   async function getProAuthToken(relationId: string): Promise<string> {
-    let token = proSessionTokens.get(relationId);
+    let token = proSessionStore.get(relationId);
     if (!token) {
       const client = await getContaAzulClient();
       const session = await client.switchToProSession(relationId);
       token = session.authToken;
-      proSessionTokens.set(relationId, token);
+      proSessionStore.set(relationId, token);
     }
     return token;
   }

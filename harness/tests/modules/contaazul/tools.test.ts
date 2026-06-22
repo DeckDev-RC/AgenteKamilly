@@ -116,6 +116,109 @@ describe("Conta Azul read tools", () => {
     ]);
   });
 
+  it("searches sale customers, financial categories, and service items after a Pro session switch", async () => {
+    const ledgerPath = await tempLedgerPath();
+    const client = createFakeClient({ proToken: "pro-token-test" });
+    const tools = createContaAzulReadTools({
+      client,
+      ledgerPath,
+      operationIdFactory: (toolName) => `op_${toolName.replace(/[^a-z]+/g, "_")}`
+    });
+
+    await tools.switchToProSession({ relationId: "rel_001" });
+    const customers = await tools.searchSaleCustomers({
+      relationId: "rel_001",
+      searchTerm: "AZUOS"
+    });
+    const categories = await tools.searchFinancialCategories({
+      relationId: "rel_001",
+      searchTerm: "Honorário"
+    });
+    const items = await tools.searchServiceItems({
+      relationId: "rel_001",
+      searchTerm: "Honorário Contábil"
+    });
+
+    expect(customers).toMatchObject({
+      status: "succeeded",
+      toolName: "contaazul.search_sale_customers",
+      data: [{ id: "cust_1", name: "AZUOS ASSESSORIA CONTÁBIL LTDA" }]
+    });
+    expect(categories).toMatchObject({
+      status: "succeeded",
+      toolName: "contaazul.search_financial_categories",
+      data: [{ uuid: "cat_1", dsNaturezaFinanceira: "Honorário contábil mensal" }]
+    });
+    expect(items).toMatchObject({
+      status: "succeeded",
+      toolName: "contaazul.search_service_items",
+      data: [{ id: "item_1", name: "Honorário Contábil" }]
+    });
+    expect(client.lookupCalls).toEqual([
+      {
+        name: "searchSaleCustomers",
+        payload: { authToken: "pro-token-test", searchTerm: "AZUOS" }
+      },
+      {
+        name: "searchFinancialCategories",
+        payload: { authToken: "pro-token-test", searchTerm: "Honorário" }
+      },
+      {
+        name: "searchServiceItems",
+        payload: { authToken: "pro-token-test", searchTerm: "Honorário Contábil" }
+      }
+    ]);
+  });
+
+  it("shares the Pro session across separate tool instances via a shared proSessionStore", async () => {
+    const ledgerPath = await tempLedgerPath();
+    const client = createFakeClient({ proToken: "pro-token-test" });
+    const proSessionStore = new Map<string, string>();
+
+    // Turn A registry build: switch the session.
+    const turnA = createContaAzulReadTools({
+      client,
+      ledgerPath,
+      proSessionStore,
+      operationIdFactory: () => "op_turn_a"
+    });
+    await turnA.switchToProSession({ relationId: "rel_001" });
+
+    // Turn B registry build (fresh tool instance) sharing the same store.
+    const turnB = createContaAzulReadTools({
+      client,
+      ledgerPath,
+      proSessionStore,
+      operationIdFactory: () => "op_turn_b"
+    });
+    const receipt = await turnB.searchSaleCustomers({
+      relationId: "rel_001",
+      searchTerm: "AZUOS"
+    });
+
+    expect(receipt.status).toBe("succeeded");
+    expect(receipt.data).toEqual([{ id: "cust_1", name: "AZUOS ASSESSORIA CONTÁBIL LTDA" }]);
+  });
+
+  it("blocks Conta Azul lookup tools when Pro session was not switched", async () => {
+    const ledgerPath = await tempLedgerPath();
+    const client = createFakeClient({});
+    const tools = createContaAzulReadTools({
+      client,
+      ledgerPath,
+      operationIdFactory: () => "op_missing_lookup_session"
+    });
+
+    const receipt = await tools.searchSaleCustomers({
+      relationId: "rel_001",
+      searchTerm: "AZUOS"
+    });
+
+    expect(receipt.status).toBe("blocked");
+    expect(receipt.warnings[0]).toContain("switchToProSession");
+    expect(client.lookupCalls).toEqual([]);
+  });
+
   it("blocks financial statement search when Pro session was not switched", async () => {
     const ledgerPath = await tempLedgerPath();
     const client = createFakeClient({});
@@ -297,7 +400,7 @@ describe("Conta Azul mutation tools", () => {
     });
 
     expect(receipt.status).toBe("succeeded");
-    expect(client.calls.map((call) => call.name)).toEqual([
+    expect(client.calls.map((call: any) => call.name)).toEqual([
       "cancelChargeRequests",
       "updateInstallmentDueDate",
       "createChargeRequest"
@@ -471,7 +574,7 @@ describe("Conta Azul mutation tools", () => {
       kind: "pdf",
       path: path.join(artifactsDir, "contaazul", "op_workflow_sale", "boleto_venda_123.pdf")
     });
-    expect(client.calls.map((call) => call.name)).toEqual([
+    expect(client.calls.map((call: any) => call.name)).toEqual([
       "searchSaleCustomers",
       "searchFinancialCategories",
       "searchServiceItems",
@@ -515,7 +618,7 @@ describe("Conta Azul mutation tools", () => {
     });
 
     expect(receipt.status).toBe("succeeded");
-    expect(client.calls.map((call) => call.name)).toEqual([
+    expect(client.calls.map((call: any) => call.name)).toEqual([
       "createServiceSale",
       "getFinancialEventsByReference",
       "createChargeRequest",
@@ -523,7 +626,7 @@ describe("Conta Azul mutation tools", () => {
       "searchFinancialStatement",
       "downloadBoletoPdf"
     ]);
-    expect(client.calls.find((call) => call.name === "createChargeRequest")?.payload).toMatchObject({
+    expect(client.calls.find((call: any) => call.name === "createChargeRequest")?.payload).toMatchObject({
       payload: {
         installmentGroups: [
           {
@@ -532,16 +635,16 @@ describe("Conta Azul mutation tools", () => {
         ]
       }
     });
-    expect(client.calls.find((call) => call.name === "sendChargeNotification")?.payload).toMatchObject({
+    expect(client.calls.find((call: any) => call.name === "sendChargeNotification")?.payload).toMatchObject({
       payload: {
         chargeRequestIds: ["charge_new"]
       }
     });
-    expect(client.calls.find((call) => call.name === "searchFinancialStatement")?.payload).toMatchObject({
+    expect(client.calls.find((call: any) => call.name === "searchFinancialStatement")?.payload).toMatchObject({
       query: "Venda 123",
       pageSize: 100
     });
-    expect(client.calls.find((call) => call.name === "downloadBoletoPdf")?.payload).toMatchObject({
+    expect(client.calls.find((call: any) => call.name === "downloadBoletoPdf")?.payload).toMatchObject({
       chargeRequestId: "charge_new",
       chargeUrl: "https://extrato.example.test/fatura"
     });
@@ -723,7 +826,7 @@ describe("Conta Azul mutation tools", () => {
     expect(receipt.status).toBe("failed");
     expect(receipt.warnings.join(" ")).toContain("sale_uuid");
     expect(receipt.data?.result).toMatchObject({ orphanedSaleId: "sale_uuid", failedStep: "poll_financial_event" });
-    expect(base.calls.map((call) => call.name)).toEqual([
+    expect(base.calls.map((call: any) => call.name)).toEqual([
       "createServiceSale",
       "getFinancialEventsByReference"
     ]);
@@ -852,7 +955,7 @@ describe("Conta Azul mutation tools", () => {
       cleanupAction: "cancelled"
     });
     expect(repeated.status).toBe("failed");
-    expect(base.calls.slice(callCountAfterAck).map((call) => call.name)).toEqual([
+    expect(base.calls.slice(callCountAfterAck).map((call: any) => call.name)).toEqual([
       "createServiceSale",
       "getFinancialEventsByReference"
     ]);
@@ -1104,6 +1207,45 @@ describe("Conta Azul mutation tools", () => {
     expect(receipt.warnings.join(" ")).not.toContain("capture");
     expect(base.calls).toEqual([]);
   });
+
+  it("captures AmbiguityError and populates candidates and fieldName on the failed receipt", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "harness-contaazul-ambiguity-"));
+    const client = createFakeMutationClient({
+      accountancyClients: {
+        items: [
+          { relationId: "rel_1", tenantId: 101, name: "Kamilly Aguiar" },
+          { relationId: "rel_2", tenantId: 102, name: "Kamilly Santos" }
+        ]
+      }
+    });
+
+    const tools = createContaAzulMutationTools({
+      client,
+      ledgerPath: path.join(dir, "ledger", "operations.jsonl"),
+      artifactsDir: path.join(dir, "artifacts"),
+      runtimeMode: "dry-run",
+      allowLiveMutations: false,
+      config: mutationConfig(),
+      proSessionStore: new Map(),
+      operationIdFactory: () => "op_ambiguous"
+    });
+
+    const receipt = await tools.createServiceSaleBoletoWorkflow({
+      tenantId: "Kamilly", // matches both Kamilly Aguiar and Kamilly Santos partially!
+      customerName: "Cliente",
+      categoryName: "Honorario",
+      itemName: "Item",
+      serviceDescription: "Desc",
+      unitValueBr: "10,00",
+      dueDateBr: "30/06/2026",
+      notification: { email: "test@example.com" }
+    });
+
+    expect(receipt.status).toBe("failed");
+    expect(receipt.summary).toContain("Multiplos itens encontrados");
+    expect(receipt.candidates).toEqual(["101 | Kamilly Aguiar", "102 | Kamilly Santos"]);
+    expect(receipt.fieldName).toBe("Conta Azul Mais tenant");
+  });
 });
 
 async function tempLedgerPath(): Promise<string> {
@@ -1118,9 +1260,11 @@ function createFakeClient(options: {
   searchError?: Error;
 }): ContaAzulReadClient & {
   searchCalls: Array<{ authToken: string; query?: string; pageSize: number }>;
+  lookupCalls: Array<{ name: string; payload: unknown }>;
 } {
   const client = {
     searchCalls: [] as Array<{ authToken: string; query?: string; pageSize: number }>,
+    lookupCalls: [] as Array<{ name: string; payload: unknown }>,
     async listAccountancyClients() {
       return options.accountancyClients ?? { items: [] };
     },
@@ -1135,6 +1279,18 @@ function createFakeClient(options: {
         pageSize: params.pageSize ?? 100
       });
       return options.financialStatementItems ?? [];
+    },
+    async searchSaleCustomers(params: unknown) {
+      client.lookupCalls.push({ name: "searchSaleCustomers", payload: params });
+      return [{ id: "cust_1", name: "AZUOS ASSESSORIA CONTÁBIL LTDA" }];
+    },
+    async searchFinancialCategories(params: unknown) {
+      client.lookupCalls.push({ name: "searchFinancialCategories", payload: params });
+      return [{ uuid: "cat_1", dsNaturezaFinanceira: "Honorário contábil mensal" }];
+    },
+    async searchServiceItems(params: unknown) {
+      client.lookupCalls.push({ name: "searchServiceItems", payload: params });
+      return [{ id: "item_1", name: "Honorário Contábil" }];
     }
   };
 
@@ -1149,13 +1305,13 @@ function mutationConfig() {
   };
 }
 
-function createFakeMutationClient(_options: {}): ContaAzulMutationClient & {
-  calls: Array<{ name: string; payload: unknown }>;
-} {
+function createFakeMutationClient(options: {
+  accountancyClients?: unknown;
+} = {}): any {
   const client = {
     calls: [] as Array<{ name: string; payload: unknown }>,
     async listAccountancyClients() {
-      return {
+      return options.accountancyClients ?? {
         items: [
           {
             relationId: "rel_001",
