@@ -29,6 +29,8 @@ export type ToolReceipt<T = unknown> = {
   data?: T;
   artifacts: Artifact[];
   warnings: string[];
+  candidates?: string[];
+  fieldName?: string;
 };
 
 export type ApprovalPreview = {

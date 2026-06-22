@@ -14,8 +14,14 @@ import {
   listOperationSummaries,
   summarizeOperationById
 } from "../core/operation-summary.js";
+import {
+  checkContaAzulSessionState,
+  loadBrowserState
+} from "../core/session-store.js";
 import type { ToolRegistry } from "../core/tool-registry.js";
 import type { ToolReceipt } from "../core/tool-types.js";
+import { MappedContaAzulSessionClient } from "../modules/contaazul/client.js";
+import { parseAccountancyClients } from "../modules/contaazul/parsers.js";
 import type {
   AgentTurnApiRequest,
   AgentTurnApiResponse,
@@ -30,6 +36,10 @@ import {
   type DraftStore,
   type OperationDraft
 } from "./draft-store.js";
+import {
+  createInteractiveFlowStore,
+  runInteractiveFlowTurn
+} from "./interactive-flow-controller.js";
 
 export type ConfereService = {
   getStatus(): Promise<ConfereStatus>;
@@ -40,6 +50,10 @@ export type ConfereService = {
   summarizeOperation(operationId: string): Promise<Awaited<ReturnType<typeof summarizeOperationById>>>;
   getDraft(operationId: string): OperationDraft | undefined;
   saveDraftForTest(draft: OperationDraft): void;
+  listAccountancyClients(): Promise<any[]>;
+  searchSaleCustomers(relationId: string, searchTerm: string): Promise<any[]>;
+  searchFinancialCategories(relationId: string, searchTerm: string): Promise<any[]>;
+  searchServiceItems(relationId: string, searchTerm: string): Promise<any[]>;
 };
 
 export type CreateConfereServiceOptions = {
@@ -55,9 +69,18 @@ export async function createConfereService(
 ): Promise<ConfereService> {
   const cwd = resolveConfigCwd(options.cwd ?? process.cwd());
   loadDotenv({ path: path.resolve(cwd, ".env"), override: false, quiet: true });
+  loadDotenv({ path: path.resolve(cwd, "contaazul/.env"), override: false, quiet: true });
   const baseEnv = { ...process.env, ...(options.env ?? {}) };
-  const registryFactory = options.registryFactory ?? createDefaultMappedToolRegistry;
+  // Persist Pro-session tokens across agent turns. runtime() rebuilds the tool
+  // registry every turn, so without a shared store the session switched on the
+  // tenant-selection turn is gone by the search turn (search would block as
+  // "Pro session not available"). One store, reused by every per-turn registry.
+  const proSessionStore = new Map<string, string>();
+  const registryFactory =
+    options.registryFactory ??
+    ((config: HarnessConfig) => createDefaultMappedToolRegistry(config, proSessionStore));
   const draftStore = options.draftStore ?? createDraftStore();
+  const interactiveFlowStore = createInteractiveFlowStore();
 
   function loadConfig(runtimeMode?: "dry-run" | "live"): HarnessConfig {
     return loadHarnessConfig(
@@ -77,6 +100,27 @@ export async function createConfereService(
     const config = loadConfig(runtimeMode);
     const { registry, warnings } = await registryFactory(config);
     return { config, registry, warnings };
+  }
+
+  async function getContaAzulClient() {
+    const config = loadConfig("dry-run");
+    const state = await loadBrowserState(config.contaAzulStatePath);
+    const health = checkContaAzulSessionState(state);
+    if (!health.ok) {
+      throw new Error(`Sessão do Conta Azul inválida ou expirada. ${health.reason}`);
+    }
+    return new MappedContaAzulSessionClient({ state });
+  }
+
+  async function getProAuthToken(relationId: string): Promise<string> {
+    let token = proSessionStore.get(relationId);
+    if (!token) {
+      const client = await getContaAzulClient();
+      const session = await client.switchToProSession(relationId);
+      token = session.authToken;
+      proSessionStore.set(relationId, token);
+    }
+    return token;
   }
 
   return {
@@ -108,11 +152,36 @@ export async function createConfereService(
 
     async runAgentTurn(input) {
       const { config, registry, warnings } = await runtime("dry-run");
-      const provider = options.modelProvider ?? createAgentModelProvider(config);
       const params = {
         ...(input.params ?? {}),
         ...(input.operatorConfirmation ? { operatorConfirmation: true } : {})
       };
+      const interactive = await runInteractiveFlowTurn({
+        request: input.request,
+        registry,
+        sessionId: input.sessionId,
+        store: interactiveFlowStore,
+        params
+      });
+      if (interactive.handled) {
+        if (interactive.draft) {
+          draftStore.save({
+            operationId: interactive.draft.operationId,
+            toolName: interactive.draft.toolName,
+            request: input.request,
+            params: interactive.draft.params,
+            createdAt: new Date().toISOString()
+          });
+        }
+        return {
+          status: "ok",
+          result: interactive.result,
+          draftOperationId: interactive.draftOperationId,
+          warnings
+        };
+      }
+
+      const provider = options.modelProvider ?? createAgentModelProvider(config);
       const result = await runAgentTurn({
         request: input.request,
         registry,
@@ -217,6 +286,30 @@ export async function createConfereService(
 
     saveDraftForTest(draft) {
       draftStore.save(draft);
+    },
+
+    async listAccountancyClients() {
+      const client = await getContaAzulClient();
+      const raw = await client.listAccountancyClients();
+      return parseAccountancyClients(raw);
+    },
+
+    async searchSaleCustomers(relationId, searchTerm) {
+      const client = await getContaAzulClient();
+      const authToken = await getProAuthToken(relationId);
+      return client.searchSaleCustomers({ authToken, searchTerm });
+    },
+
+    async searchFinancialCategories(relationId, searchTerm) {
+      const client = await getContaAzulClient();
+      const authToken = await getProAuthToken(relationId);
+      return client.searchFinancialCategories({ authToken, searchTerm });
+    },
+
+    async searchServiceItems(relationId, searchTerm) {
+      const client = await getContaAzulClient();
+      const authToken = await getProAuthToken(relationId);
+      return client.searchServiceItems({ authToken, searchTerm });
     }
   };
 }
@@ -247,7 +340,10 @@ function saveDraftFromAgentResult(input: {
 
 const LIVE_APPROVAL_TOOL_ALLOWLIST = new Set([
   "asaas.create_boleto_charge_workflow",
+  "asaas.update_charge_due_date",
   "contaazul.create_service_sale_boleto_workflow",
+  "contaazul.update_due_date_reissue_boleto_workflow",
+  "contaazul.create_customer_workflow",
   "contaazul.acknowledge_orphan_cleanup"
 ]);
 
@@ -332,7 +428,8 @@ function toAgentResultView(result: Awaited<ReturnType<typeof runAgentTurn>>) {
       risk: result.risk,
       confidence: result.confidence,
       approvalAvailable: false,
-      reason: result.reason
+      reason: result.reason,
+      summary: result.reason
     };
   }
 
@@ -349,7 +446,8 @@ function toAgentResultView(result: Awaited<ReturnType<typeof runAgentTurn>>) {
       risk: result.plan.risk,
       confidence: result.plan.confidence,
       approvalAvailable: false,
-      reason: result.plan.reason
+      reason: result.plan.reason,
+      summary: result.plan.reason
     };
   }
 
@@ -360,6 +458,7 @@ function toAgentResultView(result: Awaited<ReturnType<typeof runAgentTurn>>) {
     warnings: [],
     approvalAvailable: false,
     reason: "reason" in result ? result.reason : undefined,
-    toolName: "toolName" in result ? result.toolName : undefined
+    toolName: "toolName" in result ? result.toolName : undefined,
+    summary: "reason" in result ? result.reason : undefined
   };
 }

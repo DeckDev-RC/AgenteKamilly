@@ -205,9 +205,11 @@ describe("LLM agent planner", () => {
     });
 
     expect(result).toMatchObject({
-      status: "blocked",
-      reason: expect.stringContaining("params failed tool validation")
+      status: "needs_input",
+      toolName: "contaazul.create_service_sale_boleto_workflow",
+      missingFields: ["notification.phone"]
     });
+    expect(JSON.stringify((result as { params?: unknown }).params ?? {})).not.toContain("[REDACTED");
   });
 
   it("normalizes common missing-field aliases to registered tool field names", async () => {
@@ -382,13 +384,27 @@ describe("LLM agent planner", () => {
     });
   });
 
-  it("blocks model plans that select unregistered tools", async () => {
+  it("guides the operator with available capabilities when the model picks an unregistered tool", async () => {
+    const registry = createToolRegistry();
+    registry.register({
+      name: "asaas.create_boleto_charge_workflow",
+      description: "Resolve an Asaas customer and plan boleto creation.",
+      parameters: z.object({}).passthrough(),
+      execute: async () => ({})
+    });
+    registry.register({
+      name: "contaazul.create_customer_workflow",
+      description: "Cadastrar cliente no Conta Azul.",
+      parameters: z.object({}).passthrough(),
+      execute: async () => ({})
+    });
+
     const result = await planAgentTurn({
-      request: "criar boleto",
-      registry: createToolRegistry(),
+      request: "cancelar a cobranca",
+      registry,
       provider: createFakeModelProvider({
-        intent: "bad_route",
-        toolName: "contaazul.low_level_post",
+        intent: "cancel",
+        toolName: "contaazul.cancel_charge_workflow",
         params: {},
         missingFields: [],
         questions: [],
@@ -398,11 +414,12 @@ describe("LLM agent planner", () => {
       })
     });
 
-    expect(result).toMatchObject({
-      status: "blocked",
-      reason: expect.stringContaining("not registered"),
-      toolName: "contaazul.low_level_post"
-    });
+    expect(result.status).toBe("blocked");
+    expect(result).toMatchObject({ toolName: "contaazul.cancel_charge_workflow" });
+    const reason = (result as { reason: string }).reason;
+    expect(reason).not.toContain("not registered");
+    expect(reason).toContain("criar boleto no Asaas");
+    expect(reason).toContain("cadastrar cliente no Conta Azul");
   });
 
   it("blocks requests for official provider integrations before asking the model", async () => {

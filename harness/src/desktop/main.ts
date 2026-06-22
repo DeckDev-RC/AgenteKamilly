@@ -22,10 +22,14 @@ async function createWindow(): Promise<void> {
     title: "Confere",
     backgroundColor: "#f7f8fb",
     webPreferences: {
-      preload: path.join(__dirname, "../preload/preload.js"),
+      preload: path.join(__dirname, "../preload/preload.mjs"),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true
+      // Sandbox disabled because the ESM (.mjs) preload emitted by electron-vite
+      // cannot run in a sandboxed renderer. The renderer only loads local bundled
+      // content (no remote/untrusted web), so contextIsolation + nodeIntegration:false
+      // remain the effective boundary keeping Node out of the renderer.
+      sandbox: false
     }
   });
 
@@ -72,6 +76,26 @@ ipcMain.handle("confere:open-external", async (_event, url: string) => {
 
 ipcMain.handle("confere:open-path", async (_event, filePath: string) => {
   await shell.openPath(filePath);
+});
+
+ipcMain.handle("confere:list-accountancy-clients", async () => {
+  if (!confereService) throw new Error("Confere service is not ready.");
+  return confereService.listAccountancyClients();
+});
+
+ipcMain.handle("confere:search-sale-customers", async (_event, { relationId, searchTerm }) => {
+  if (!confereService) throw new Error("Confere service is not ready.");
+  return confereService.searchSaleCustomers(relationId, searchTerm);
+});
+
+ipcMain.handle("confere:search-financial-categories", async (_event, { relationId, searchTerm }) => {
+  if (!confereService) throw new Error("Confere service is not ready.");
+  return confereService.searchFinancialCategories(relationId, searchTerm);
+});
+
+ipcMain.handle("confere:search-service-items", async (_event, { relationId, searchTerm }) => {
+  if (!confereService) throw new Error("Confere service is not ready.");
+  return confereService.searchServiceItems(relationId, searchTerm);
 });
 
 app.whenReady().then(createWindow);

@@ -3,6 +3,7 @@ import { createToolRegistry, type ToolRegistry } from "../core/tool-registry.js"
 const SAFE_AGENT_TOOL_NAMES = new Set([
   "asaas.create_boleto_charge_workflow",
   "contaazul.create_service_sale_boleto_workflow",
+  "contaazul.create_customer_workflow",
   "contaazul.acknowledge_orphan_cleanup"
 ]);
 

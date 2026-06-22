@@ -1,9 +1,9 @@
 import { Building2, ClipboardList, Home, Landmark, RadioTower } from "lucide-react";
 import type { ReactElement, ReactNode } from "react";
 
-import type { ScreenId } from "../types.js";
+type LegacyScreenId = "home" | "contaazul" | "asaas" | "operacoes" | "sessoes";
 
-const NAV_ITEMS: Array<{ id: ScreenId; label: string; icon: typeof Home }> = [
+const NAV_ITEMS: Array<{ id: LegacyScreenId; label: string; icon: typeof Home }> = [
   { id: "home", label: "Início", icon: Home },
   { id: "contaazul", label: "Conta Azul", icon: Building2 },
   { id: "asaas", label: "Asaas", icon: Landmark },
@@ -12,8 +12,8 @@ const NAV_ITEMS: Array<{ id: ScreenId; label: string; icon: typeof Home }> = [
 ];
 
 export function AppShell(props: {
-  activeScreen: ScreenId;
-  onNavigate: (screen: ScreenId) => void;
+  activeScreen: LegacyScreenId;
+  onNavigate: (screen: LegacyScreenId) => void;
   children: ReactNode;
 }): ReactElement {
   return (

@@ -201,6 +201,37 @@ describe("MappedContaAzulSessionClient", () => {
       "https://services.contaazul.com/app/v1/negotiations/next-number"
     ]);
   });
+
+  it("calls lookupCnpj, lookupCep, calculateTaxes, getPersonDetails, getCompanyDetails, getBillingContact", async () => {
+    const requests: Array<{ url: string; options: RequestInit }> = [];
+    const client = new MappedContaAzulSessionClient({
+      state,
+      request: fakeRequestSequence(requests, [
+        jsonResponse({ name: "Empresa CNPJ" }),
+        jsonResponse({ idCidade: 1234 }),
+        jsonResponse({ calculated: true }),
+        jsonResponse({ name: "Pessoa Detalhada" }),
+        jsonResponse({ name: "Empresa Conta Azul" }),
+        jsonResponse({ email: "billing@cobranca.com" })
+      ])
+    });
+
+    await expect(client.lookupCnpj({ authToken: "token", cnpj: "05.570.714/0001-59" })).resolves.toEqual({ name: "Empresa CNPJ" });
+    await expect(client.lookupCep({ cep: "01001-000" })).resolves.toEqual({ idCidade: 1234 });
+    await expect(client.calculateTaxes({ authToken: "token", payload: { some: "data" } })).resolves.toEqual({ calculated: true });
+    await expect(client.getPersonDetails({ authToken: "token", personUuid: "some-uuid" })).resolves.toEqual({ name: "Pessoa Detalhada" });
+    await expect(client.getCompanyDetails({ authToken: "token" })).resolves.toEqual({ name: "Empresa Conta Azul" });
+    await expect(client.getBillingContact({ authToken: "token", personId: "some-id" })).resolves.toEqual({ email: "billing@cobranca.com" });
+
+    expect(requests.map((request) => request.url)).toEqual([
+      "https://services.contaazul.com/contaazul-bff/account/v1/company-info/05570714000159",
+      "https://app.contaazul.com/buscaCep.action?cep=01001000",
+      "https://services.contaazul.com/invoice-tax-management/v1/calculate-taxes",
+      "https://services.contaazul.com/contaazul-bff/person-registration/v1/persons/some-uuid",
+      "https://services.contaazul.com/contaazul-bff/account/v1/company-details-edit",
+      "https://services.contaazul.com/contaazul-bff/person-registration/v1/persons/some-id/billing-contact"
+    ]);
+  });
 });
 
 function fakeRequestSequence(

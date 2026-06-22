@@ -145,7 +145,7 @@ describe("dry-run e2e orchestration", () => {
       toolName: "contaazul.create_service_sale_boleto_workflow",
       receipt: { status: "planned", dryRun: true }
     });
-    expect(client.calls.map((call) => call.name)).toEqual([
+    expect(client.calls.map((call: any) => call.name)).toEqual([
       "searchSaleCustomers",
       "searchFinancialCategories",
       "searchServiceItems",
@@ -192,9 +192,7 @@ function createFakeAsaasMutationClient(): AsaasMutationClient & { calls: string[
   };
 }
 
-function createFakeContaAzulMutationClient(): ContaAzulMutationClient & {
-  calls: Array<{ name: string; payload: unknown }>;
-} {
+function createFakeContaAzulMutationClient(): any {
   const client = {
     calls: [] as Array<{ name: string; payload: unknown }>,
     async listAccountancyClients() {

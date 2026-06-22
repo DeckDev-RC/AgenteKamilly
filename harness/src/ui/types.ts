@@ -1,1 +1,1 @@
-export type ScreenId = "home" | "contaazul" | "asaas" | "operacoes" | "sessoes";
+export type ScreenId = "conversa" | "operacoes" | "sessoes";

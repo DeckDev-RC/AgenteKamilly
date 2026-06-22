@@ -94,16 +94,51 @@ export type GetNextSaleNumberParams = {
   authToken: string;
 };
 
+export type LookupCnpjParams = {
+  authToken: string;
+  cnpj: string;
+};
+
+export type LookupCepParams = {
+  cep: string;
+};
+
+export type CalculateTaxesParams = {
+  authToken: string;
+  payload: Record<string, unknown>;
+};
+
+export type GetFinancialEventDetailsParams = {
+  authToken: string;
+  financialEventId: string;
+};
+
+export type GetPersonDetailsParams = {
+  authToken: string;
+  personUuid: string;
+};
+
+export type GetCompanyDetailsParams = {
+  authToken: string;
+};
+
+export type GetBillingContactParams = {
+  authToken: string;
+  personId: string;
+};
+
+
 export type ContaAzulReadClient = {
   listAccountancyClients(): Promise<unknown>;
   switchToProSession(relationId: string): Promise<ContaAzulProSession>;
   searchFinancialStatement(params: SearchFinancialStatementParams): Promise<unknown[]>;
-};
-
-export type ContaAzulMutationClient = ContaAzulReadClient & {
   searchSaleCustomers(params: SearchSaleCustomersParams): Promise<unknown[]>;
   searchFinancialCategories(params: SearchFinancialCategoriesParams): Promise<unknown[]>;
   searchServiceItems(params: SearchServiceItemsParams): Promise<unknown[]>;
+  getPersonDetails(params: GetPersonDetailsParams): Promise<unknown>;
+};
+
+export type ContaAzulMutationClient = ContaAzulReadClient & {
   listOperationNatures(params: ListOperationNaturesParams): Promise<unknown[]>;
   getNextSaleNumber(params: GetNextSaleNumberParams): Promise<number>;
   cancelChargeRequests(params: CancelChargeRequestsParams): Promise<{ ok: boolean; status: number }>;
@@ -116,6 +151,13 @@ export type ContaAzulMutationClient = ContaAzulReadClient & {
   getFinancialEventSummary(params: GetFinancialEventSummaryParams): Promise<unknown>;
   downloadBoletoPdf(params: DownloadBoletoPdfParams): Promise<Buffer>;
   verifyProSession?(params: { authToken: string }): Promise<boolean>;
+  lookupCnpj(params: LookupCnpjParams): Promise<unknown>;
+  lookupCep(params: LookupCepParams): Promise<unknown>;
+  calculateTaxes(params: CalculateTaxesParams): Promise<unknown>;
+  getPersonDetails(params: GetPersonDetailsParams): Promise<unknown>;
+  getCompanyDetails(params: GetCompanyDetailsParams): Promise<unknown>;
+  getBillingContact(params: GetBillingContactParams): Promise<unknown>;
+  getFinancialEventDetails(params: GetFinancialEventDetailsParams): Promise<unknown>;
 };
 
 export class ContaAzulSessionExpiredError extends Error {
@@ -382,7 +424,8 @@ export class MappedContaAzulSessionClient implements ContaAzulMutationClient {
     );
     assertNotExpired(response);
     if (!response.ok) {
-      throw new Error(`Conta Azul customer create failed with HTTP ${response.status}.`);
+      const text = await response.text();
+      throw new Error(`Erro ao salvar cliente (HTTP ${response.status}): ${text}`);
     }
     return readJsonOrText(response);
   }
@@ -481,6 +524,114 @@ export class MappedContaAzulSessionClient implements ContaAzulMutationClient {
       throw new Error(`Conta Azul Pro session health check failed with HTTP ${response.status}.`);
     }
     return true;
+  }
+
+  async lookupCnpj(params: LookupCnpjParams): Promise<unknown> {
+    const cleanCnpj = params.cnpj.replace(/\D/g, "");
+    const response = await this.request(
+      `${SERVICES_BASE_URL}/contaazul-bff/account/v1/company-info/${cleanCnpj}`,
+      {
+        headers: proReadHeaders(params.authToken)
+      }
+    );
+    assertNotExpired(response);
+    if (!response.ok) {
+      throw new Error(`Conta Azul CNPJ search failed with HTTP ${response.status}.`);
+    }
+    return response.json();
+  }
+
+  async lookupCep(params: LookupCepParams): Promise<unknown> {
+    const cleanCep = params.cep.replace(/\D/g, "");
+    const response = await this.request(
+      `${APP_BASE_URL}/buscaCep.action?cep=${cleanCep}`,
+      {
+        headers: {
+          Cookie: buildCookieString(this.state),
+          Accept: "application/json, text/plain, */*",
+          "User-Agent": defaultUserAgent()
+        }
+      }
+    );
+    assertNotExpired(response);
+    if (!response.ok) {
+      throw new Error(`Conta Azul CEP search failed with HTTP ${response.status}.`);
+    }
+    return response.json();
+  }
+
+  async calculateTaxes(params: CalculateTaxesParams): Promise<unknown> {
+    const response = await this.request(
+      `${SERVICES_BASE_URL}/invoice-tax-management/v1/calculate-taxes`,
+      {
+        method: "POST",
+        headers: proJsonHeaders(params.authToken),
+        body: JSON.stringify(params.payload)
+      }
+    );
+    assertNotExpired(response);
+    if (!response.ok) {
+      throw new Error(`Conta Azul tax calculation failed with HTTP ${response.status}.`);
+    }
+    return response.json();
+  }
+
+  async getFinancialEventDetails(params: GetFinancialEventDetailsParams): Promise<unknown> {
+    const response = await this.request(
+      `${SERVICES_BASE_URL}/finance-pro/v1/financial-events/${encodeURIComponent(
+        params.financialEventId
+      )}`,
+      {
+        headers: proReadHeaders(params.authToken)
+      }
+    );
+    assertNotExpired(response);
+    if (!response.ok) {
+      throw new Error(`Conta Azul financial event details failed with HTTP ${response.status}.`);
+    }
+    return response.json();
+  }
+
+  async getPersonDetails(params: GetPersonDetailsParams): Promise<unknown> {
+    const response = await this.request(
+      `${SERVICES_BASE_URL}/contaazul-bff/person-registration/v1/persons/${encodeURIComponent(params.personUuid)}`,
+      {
+        headers: proReadHeaders(params.authToken)
+      }
+    );
+    assertNotExpired(response);
+    if (!response.ok) {
+      throw new Error(`Conta Azul person details failed with HTTP ${response.status}.`);
+    }
+    return response.json();
+  }
+
+  async getCompanyDetails(params: GetCompanyDetailsParams): Promise<unknown> {
+    const response = await this.request(
+      `${SERVICES_BASE_URL}/contaazul-bff/account/v1/company-details-edit`,
+      {
+        headers: proReadHeaders(params.authToken)
+      }
+    );
+    assertNotExpired(response);
+    if (!response.ok) {
+      throw new Error(`Conta Azul company details failed with HTTP ${response.status}.`);
+    }
+    return response.json();
+  }
+
+  async getBillingContact(params: GetBillingContactParams): Promise<unknown> {
+    const response = await this.request(
+      `${SERVICES_BASE_URL}/contaazul-bff/person-registration/v1/persons/${encodeURIComponent(params.personId)}/billing-contact`,
+      {
+        headers: proReadHeaders(params.authToken)
+      }
+    );
+    assertNotExpired(response);
+    if (!response.ok) {
+      throw new Error(`Conta Azul billing contact failed with HTTP ${response.status}.`);
+    }
+    return response.json();
   }
 
   private maisHeaders(): Record<string, string> {

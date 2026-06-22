@@ -119,6 +119,18 @@ function fakeService(): ConfereService {
     getDraft() {
       return undefined;
     },
-    saveDraftForTest() {}
+    saveDraftForTest() {},
+    async listAccountancyClients() {
+      return [];
+    },
+    async searchSaleCustomers() {
+      return [];
+    },
+    async searchFinancialCategories() {
+      return [];
+    },
+    async searchServiceItems() {
+      return [];
+    }
   };
 }

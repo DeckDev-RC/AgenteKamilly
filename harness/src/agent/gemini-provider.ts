@@ -39,43 +39,64 @@ export function createGeminiModelProvider(options: GeminiModelProviderOptions): 
     name: "gemini",
     model,
     async generateText(input: ModelRequest): Promise<ModelResponse> {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), input.timeoutMs ?? defaultTimeoutMs);
+      let attempts = 0;
+      const maxAttempts = 3;
+      const baseDelayMs = 500;
 
-      try {
-        const response = await fetchImpl(`${endpointBaseUrl}/models/${model}:generateContent`, {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            "x-goog-api-key": apiKey
-          },
-          body: JSON.stringify({
-            contents: toGeminiContents(input.messages),
-            generationConfig: {
-              temperature: 0.2,
-              responseMimeType: "application/json",
-              ...(input.responseSchema ? { responseSchema: input.responseSchema } : {})
+      while (true) {
+        attempts++;
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), input.timeoutMs ?? defaultTimeoutMs);
+
+        try {
+          const response = await fetchImpl(`${endpointBaseUrl}/models/${model}:generateContent`, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-goog-api-key": apiKey
+            },
+            body: JSON.stringify({
+              contents: toGeminiContents(input.messages),
+              generationConfig: {
+                temperature: 0.2,
+                responseMimeType: "application/json",
+                ...(input.responseSchema ? { responseSchema: input.responseSchema } : {})
+              }
+            }),
+            signal: controller.signal
+          });
+
+          const rawText = await response.text();
+          if (!response.ok) {
+            const isTransient = [429, 502, 503, 504].includes(response.status);
+            if (isTransient && attempts < maxAttempts) {
+              const delay = baseDelayMs * Math.pow(2, attempts - 1);
+              await new Promise((resolve) => setTimeout(resolve, delay));
+              continue;
             }
-          }),
-          signal: controller.signal
-        });
+            throw new Error(formatGeminiError(response.status, rawText));
+          }
 
-        const rawText = await response.text();
-        if (!response.ok) {
-          throw new Error(formatGeminiError(response.status, rawText));
+          const parsed = parseJson<GeminiResponse>(rawText);
+          const text = parsed.candidates?.[0]?.content?.parts
+            ?.map((part) => part.text ?? "")
+            .join("")
+            .trim();
+
+          if (!text) throw new Error("Gemini API response did not include text content.");
+
+          return { provider: "gemini", model, text };
+        } catch (error) {
+          const isAbort = error instanceof Error && error.name === "AbortError";
+          if (!isAbort && attempts < maxAttempts) {
+            const delay = baseDelayMs * Math.pow(2, attempts - 1);
+            await new Promise((resolve) => setTimeout(resolve, delay));
+            continue;
+          }
+          throw error;
+        } finally {
+          clearTimeout(timeout);
         }
-
-        const parsed = parseJson<GeminiResponse>(rawText);
-        const text = parsed.candidates?.[0]?.content?.parts
-          ?.map((part) => part.text ?? "")
-          .join("")
-          .trim();
-
-        if (!text) throw new Error("Gemini API response did not include text content.");
-
-        return { provider: "gemini", model, text };
-      } finally {
-        clearTimeout(timeout);
       }
     }
   };
