@@ -1,6 +1,6 @@
 import type { AgentChoiceView, AgentResultView } from "./api-types.js";
 import type { ToolRegistry } from "../core/tool-registry.js";
-import type { AccountancyClient, CustomerMatch, ToolReceipt } from "../core/tool-types.js";
+import type { AccountancyClient, CustomerMatch, PendingCharge, ToolReceipt } from "../core/tool-types.js";
 
 const CONTAZUL_FLOW = "contaazul_service_sale_boleto";
 const ASAAS_FLOW = "asaas_boleto_charge";
@@ -47,7 +47,10 @@ type InteractiveFlowState = {
     | "asaasCustomerChoice"
     | "asaasValue"
     | "asaasDueDate"
-    | "asaasDescription";
+    | "asaasDescription"
+    | "asaasUpdateCustomerSearch"
+    | "asaasUpdateChargeChoice"
+    | "asaasUpdateDueDate";
   slots: Record<string, unknown>;
 };
 
@@ -120,7 +123,10 @@ export async function runInteractiveFlowTurn(input: InteractiveFlowInput): Promi
       input.store.set(sessionKey, { flow: CONTAZUL_FLOW, step: "tenant", slots: {} });
       return promptContaAzulTenant(input.registry);
     }
-    // start_asaas_update_due_date     → Task 5
+    if (marker.action === "start_asaas_update_due_date") {
+      input.store.set(sessionKey, { flow: ASAAS_UPDATE_FLOW, step: "asaasUpdateCustomerSearch", slots: {} });
+      return promptAsaasUpdateCustomerSearch();
+    }
     // start_contaazul_create_customer → Task 9
     // start_contaazul_update_due_date → Task 7
   }
@@ -132,6 +138,15 @@ export async function runInteractiveFlowTurn(input: InteractiveFlowInput): Promi
       slots: {}
     };
     return continueAsaasFlow(input, sessionKey, state, marker);
+  }
+
+  if (marker.flow === ASAAS_UPDATE_FLOW) {
+    const state = existing ?? {
+      flow: ASAAS_UPDATE_FLOW,
+      step: "asaasUpdateCustomerSearch" as const,
+      slots: {}
+    };
+    return continueAsaasUpdateFlow(input, sessionKey, state, marker);
   }
 
   if (marker.flow === CONTAZUL_FLOW) {
@@ -149,6 +164,10 @@ export async function runInteractiveFlowTurn(input: InteractiveFlowInput): Promi
 
   if (existing?.flow === ASAAS_FLOW) {
     return continueAsaasFlow(input, sessionKey, existing, marker);
+  }
+
+  if (existing?.flow === ASAAS_UPDATE_FLOW) {
+    return continueAsaasUpdateFlow(input, sessionKey, existing, marker);
   }
 
   if (!looksLikeContaAzulServiceBoletoRequest(input.request)) {
@@ -423,6 +442,205 @@ async function collectAsaasDescriptionAndPlan(
       summary: receipt.status === "planned"
         ? "Dry-run preparado para revisão."
         : receipt.summary,
+      missingFields: [],
+      questions: [],
+      warnings: receipt.warnings,
+      approvalAvailable: receipt.status === "planned",
+      receiptData: receipt.data
+    }
+  };
+}
+
+function promptAsaasUpdateCustomerSearch(): InteractiveFlowResult {
+  return {
+    handled: true,
+    result: needsInput({
+      toolName: ASAAS_UPDATE_TOOL_NAME,
+      provider: "asaas",
+      intent: "update_charge_due_date",
+      summary: "Vamos alterar o vencimento de uma cobrança no Asaas.",
+      missingFields: ["customerSearch"],
+      questions: ["Digite o nome do cliente para pesquisa."]
+    })
+  };
+}
+
+async function continueAsaasUpdateFlow(
+  input: InteractiveFlowInput,
+  sessionKey: string,
+  state: InteractiveFlowState,
+  marker: InteractiveMarker
+): Promise<InteractiveFlowResult> {
+  if (marker.action === "select_customer") {
+    state.slots = {
+      ...state.slots,
+      customerId: stringValue(input.params?.customerId),
+      customerName: stringValue(input.params?.customerName)
+    };
+    state.step = "asaasUpdateChargeChoice";
+    input.store.set(sessionKey, state);
+    return listAsaasChargesForChoice(input, state, sessionKey);
+  }
+  if (marker.action === "select_charge") {
+    state.slots = { ...state.slots, chargeId: stringValue(input.params?.chargeId) };
+    state.step = "asaasUpdateDueDate";
+    input.store.set(sessionKey, state);
+    return {
+      handled: true,
+      result: needsInput({
+        toolName: ASAAS_UPDATE_TOOL_NAME,
+        provider: "asaas",
+        intent: "update_charge_due_date",
+        summary: "Cobrança selecionada.",
+        missingFields: ["dueDateBr"],
+        questions: ["Digite o novo vencimento (DD/MM/AAAA)."]
+      })
+    };
+  }
+  if (state.step === "asaasUpdateCustomerSearch") return searchAsaasUpdateCustomers(input, state, sessionKey);
+  if (state.step === "asaasUpdateChargeChoice") return listAsaasChargesForChoice(input, state, sessionKey);
+  if (state.step === "asaasUpdateDueDate") return collectAsaasUpdateDueDateAndPlan(input, state, sessionKey);
+  return promptAsaasUpdateCustomerSearch();
+}
+
+async function searchAsaasUpdateCustomers(
+  input: InteractiveFlowInput,
+  state: InteractiveFlowState,
+  sessionKey: string
+): Promise<InteractiveFlowResult> {
+  const query = input.request.trim();
+  if (!query) return promptAsaasUpdateCustomerSearch();
+  const receipt = await executeTool<CustomerMatch[]>(input.registry, "asaas.search_customers", { query });
+  const customers = Array.isArray(receipt.data) ? receipt.data : [];
+  if (customers.length === 0) {
+    state.step = "asaasUpdateCustomerSearch";
+    input.store.set(sessionKey, state);
+    return {
+      handled: true,
+      result: needsInput({
+        toolName: ASAAS_UPDATE_TOOL_NAME,
+        provider: "asaas",
+        intent: "update_charge_due_date",
+        summary: `Não encontrei ninguém com "${query}".`,
+        missingFields: ["customerSearch"],
+        questions: [`Não encontrei ninguém com "${query}". Tente outro nome.`]
+      })
+    };
+  }
+  if (customers.length === 1) {
+    state.slots = { ...state.slots, customerId: customers[0]!.id, customerName: customers[0]!.name };
+    state.step = "asaasUpdateChargeChoice";
+    input.store.set(sessionKey, state);
+    return listAsaasChargesForChoice(input, state, sessionKey);
+  }
+  state.step = "asaasUpdateChargeChoice";
+  input.store.set(sessionKey, state);
+  return {
+    handled: true,
+    result: needsInput({
+      toolName: ASAAS_UPDATE_TOOL_NAME,
+      provider: "asaas",
+      intent: "update_charge_due_date",
+      summary: `Encontrei ${customers.length} cliente(s) para "${query}".`,
+      missingFields: ["customerId"],
+      questions: ["Selecione o cliente."],
+      choices: customers.map((c) => ({
+        id: `asaas-customer:${c.id}`,
+        label: c.name,
+        description: "Cliente Asaas",
+        params: {
+          __interactive: { flow: ASAAS_UPDATE_FLOW, action: "select_customer" },
+          customerId: c.id,
+          customerName: c.name
+        }
+      }))
+    })
+  };
+}
+
+async function listAsaasChargesForChoice(
+  input: InteractiveFlowInput,
+  state: InteractiveFlowState,
+  sessionKey: string
+): Promise<InteractiveFlowResult> {
+  const customerId = stringValue(state.slots.customerId);
+  if (!customerId) return promptAsaasUpdateCustomerSearch();
+  const receipt = await executeTool<PendingCharge[]>(input.registry, "asaas.list_pending_charges", { customerId });
+  const charges = Array.isArray(receipt.data) ? receipt.data : [];
+  if (charges.length === 0) {
+    state.step = "asaasUpdateCustomerSearch";
+    input.store.set(sessionKey, state);
+    return {
+      handled: true,
+      result: needsInput({
+        toolName: ASAAS_UPDATE_TOOL_NAME,
+        provider: "asaas",
+        intent: "update_charge_due_date",
+        summary: `Nenhuma cobrança pendente para ${state.slots.customerName ?? "este cliente"}.`,
+        missingFields: ["customerSearch"],
+        questions: ["Tente outro cliente."]
+      })
+    };
+  }
+  state.step = "asaasUpdateChargeChoice";
+  input.store.set(sessionKey, state);
+  return {
+    handled: true,
+    result: needsInput({
+      toolName: ASAAS_UPDATE_TOOL_NAME,
+      provider: "asaas",
+      intent: "update_charge_due_date",
+      summary: `Cobranças pendentes de ${state.slots.customerName ?? "este cliente"}.`,
+      missingFields: ["chargeId"],
+      questions: ["Selecione a cobrança."],
+      choices: charges.map((ch) => ({
+        id: `asaas-charge:${ch.id}`,
+        label: ch.description ?? `Cobrança ${ch.id}`,
+        description: `R$ ${ch.valueBr} · vence ${ch.dueDateBr}`,
+        params: {
+          __interactive: { flow: ASAAS_UPDATE_FLOW, action: "select_charge" },
+          chargeId: ch.id
+        }
+      }))
+    })
+  };
+}
+
+async function collectAsaasUpdateDueDateAndPlan(
+  input: InteractiveFlowInput,
+  state: InteractiveFlowState,
+  sessionKey: string
+): Promise<InteractiveFlowResult> {
+  const dueDateBr = input.request.trim();
+  if (!isValidDateBr(dueDateBr)) {
+    return {
+      handled: true,
+      result: needsInput({
+        toolName: ASAAS_UPDATE_TOOL_NAME,
+        provider: "asaas",
+        intent: "update_charge_due_date",
+        summary: "Data inválida.",
+        missingFields: ["dueDateBr"],
+        questions: ["Digite o novo vencimento no formato DD/MM/AAAA."]
+      })
+    };
+  }
+  input.store.delete(sessionKey);
+  const params = { chargeId: state.slots.chargeId, dueDateBr };
+  const receipt = await executeTool<unknown>(input.registry, "asaas.update_charge_due_date", params);
+  const operationId = operationIdFromReceipt(receipt);
+  return {
+    handled: true,
+    draftOperationId: receipt.status === "planned" ? operationId : undefined,
+    draft: receipt.status === "planned" ? { operationId, toolName: receipt.toolName, params } : undefined,
+    result: {
+      status: "executed",
+      provider: "asaas",
+      intent: "update_charge_due_date",
+      toolName: receipt.toolName,
+      operationId,
+      receiptStatus: receipt.status,
+      summary: receipt.status === "planned" ? "Dry-run preparado para revisão." : receipt.summary,
       missingFields: [],
       questions: [],
       warnings: receipt.warnings,

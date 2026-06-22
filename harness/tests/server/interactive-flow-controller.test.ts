@@ -693,7 +693,71 @@ describe("interactive flow controller", () => {
     expect(result.result).toMatchObject({ missingFields: ["tenantId"] });
   });
 
-  it.todo("starts the Asaas update-due-date flow from the anchor marker");
+  it("runs the Asaas update-due-date flow from anchor through dry-run", async () => {
+    const store = createInteractiveFlowStore();
+    const registry = createToolRegistry();
+    const calls: unknown[] = [];
+    registry.register({
+      name: "asaas.search_customers",
+      description: "Search Asaas customers",
+      parameters: z.object({ query: z.string() }),
+      execute: async () => receipt("asaas.search_customers", [{ id: "ac_1", name: "JOÃO LTDA" }])
+    });
+    registry.register({
+      name: "asaas.list_pending_charges",
+      description: "List pending charges",
+      parameters: z.object({ customerId: z.string() }),
+      execute: async () =>
+        receipt("asaas.list_pending_charges", [
+          { id: "ch_1", customerId: "ac_1", valueBr: "150,00", dueDateBr: "10/06/2026", status: "PENDING", description: "Mensalidade" }
+        ])
+    });
+    registry.register({
+      name: "asaas.update_charge_due_date",
+      description: "Update charge due date",
+      parameters: z.object({}).passthrough(),
+      execute: async (params) => {
+        calls.push(params);
+        return {
+          ...receipt("asaas.update_charge_due_date", { approvalPreview: { operationId: "op_asaas_update" } }),
+          status: "planned"
+        } satisfies ToolReceipt;
+      }
+    });
+
+    await runInteractiveFlowTurn({
+      request: "começar",
+      registry, sessionId: "sess_au", store,
+      params: { __interactive: { flow: "anchor", action: "start_asaas_update_due_date" } }
+    });
+
+    const charges = await runInteractiveFlowTurn({ request: "JOÃO", registry, sessionId: "sess_au", store });
+    expect(charges.handled).toBe(true);
+    if (!charges.handled) throw new Error("expected handled result");
+    expect(charges.result.choices?.[0]).toMatchObject({
+      id: "asaas-charge:ch_1",
+      label: "Mensalidade",
+      params: {
+        __interactive: { flow: "asaas_update_charge_due_date", action: "select_charge" },
+        chargeId: "ch_1"
+      }
+    });
+
+    const askDate = await runInteractiveFlowTurn({
+      request: "Mensalidade", registry, sessionId: "sess_au", store,
+      params: { __interactive: { flow: "asaas_update_charge_due_date", action: "select_charge" }, chargeId: "ch_1" }
+    });
+    expect(askDate.handled).toBe(true);
+    if (!askDate.handled) throw new Error("expected handled result");
+    expect(askDate.result).toMatchObject({ missingFields: ["dueDateBr"] });
+
+    const planned = await runInteractiveFlowTurn({ request: "20/07/2026", registry, sessionId: "sess_au", store });
+    expect(planned.handled).toBe(true);
+    if (!planned.handled) throw new Error("expected handled result");
+    expect(planned.draftOperationId).toBe("op_asaas_update");
+    expect(planned.result).toMatchObject({ status: "executed", receiptStatus: "planned", approvalAvailable: true });
+    expect(calls).toEqual([{ chargeId: "ch_1", dueDateBr: "20/07/2026" }]);
+  });
   it.todo("starts the create-customer flow from the anchor marker");
   it.todo("starts the Conta Azul update-due-date flow from the anchor marker");
 });
