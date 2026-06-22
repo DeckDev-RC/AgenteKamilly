@@ -758,7 +758,42 @@ describe("interactive flow controller", () => {
     expect(planned.result).toMatchObject({ status: "executed", receiptStatus: "planned", approvalAvailable: true });
     expect(calls).toEqual([{ chargeId: "ch_1", dueDateBr: "20/07/2026" }]);
   });
-  it.todo("starts the create-customer flow from the anchor marker");
+  it("collects a Física customer and plans the create-customer workflow", async () => {
+    const store = createInteractiveFlowStore();
+    const registry = createToolRegistry();
+    const calls: unknown[] = [];
+    registerTenantTools(registry);
+    registry.register({
+      name: "contaazul.create_customer_workflow",
+      description: "Create customer workflow",
+      parameters: z.object({}).passthrough(),
+      execute: async (params) => {
+        calls.push(params);
+        return { ...receipt("contaazul.create_customer_workflow", { approvalPreview: { operationId: "op_cust" }, resolved: { customerId: "new_cust", customerName: "MARIA SILVA" } }), status: "planned" } satisfies ToolReceipt;
+      }
+    });
+
+    await runInteractiveFlowTurn({ request: "começar", registry, sessionId: "sess_cc", store, params: { __interactive: { flow: "anchor", action: "start_contaazul_create_customer" } } });
+    await runInteractiveFlowTurn({ request: "MAIS NEGOCIOS", registry, sessionId: "sess_cc", store, params: { __interactive: { flow: "contaazul_create_customer", action: "select_tenant" }, tenantId: 3047702, relationId: "rel_mais", tenantName: "MAIS NEGOCIOS" } });
+
+    const docPrompt = await runInteractiveFlowTurn({ request: "Física", registry, sessionId: "sess_cc", store, params: { __interactive: { flow: "contaazul_create_customer", action: "select_person_type" }, personType: "Física" } });
+    expect(docPrompt.handled).toBe(true);
+    if (!docPrompt.handled) throw new Error("expected handled result");
+    expect(docPrompt.result).toMatchObject({ missingFields: ["document"] });
+
+    // CUSTOMER_FIELDS order for Física (companyName excluded):
+    // document, name, email, cellPhone, commercialPhone, zipcode, street,
+    // numberAddress, neighborhood, complement, billingEmail, billingPhone
+    const seq = ["123.456.789-00", "MARIA SILVA", "maria@example.com", "62999990000", "pular", "74000000", "Rua A", "100", "Centro", "pular", "maria@example.com", "62999990000"];
+    let last;
+    for (const value of seq) {
+      last = await runInteractiveFlowTurn({ request: value, registry, sessionId: "sess_cc", store });
+    }
+    expect(last!.handled).toBe(true);
+    if (!last!.handled) throw new Error("expected handled result");
+    expect(last!.draftOperationId).toBe("op_cust");
+    expect(calls[0]).toMatchObject({ tenantId: 3047702, personType: "Física", document: "123.456.789-00", name: "MARIA SILVA", billingEmail: "maria@example.com", billingPhone: "62999990000" });
+  });
   it("runs the Conta Azul update-due-date flow through dry-run", async () => {
     const store = createInteractiveFlowStore();
     const registry = createToolRegistry();

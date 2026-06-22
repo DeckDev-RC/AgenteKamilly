@@ -53,7 +53,9 @@ type InteractiveFlowState = {
     | "asaasUpdateDueDate"
     | "caUpdateStatementSearch"
     | "caUpdateStatementChoice"
-    | "caUpdateDueDate";
+    | "caUpdateDueDate"
+    | "customerPersonType"
+    | "customerField";
   slots: Record<string, unknown>;
 };
 
@@ -130,7 +132,10 @@ export async function runInteractiveFlowTurn(input: InteractiveFlowInput): Promi
       input.store.set(sessionKey, { flow: ASAAS_UPDATE_FLOW, step: "asaasUpdateCustomerSearch", slots: {} });
       return promptAsaasUpdateCustomerSearch();
     }
-    // start_contaazul_create_customer → Task 9
+    if (marker.action === "start_contaazul_create_customer") {
+      input.store.set(sessionKey, { flow: CONTAZUL_CREATE_CUSTOMER_FLOW, step: "tenant", slots: {} });
+      return promptContaAzulTenant(input.registry, CONTAZUL_CREATE_CUSTOMER_FLOW);
+    }
     if (marker.action === "start_contaazul_update_due_date") {
       input.store.set(sessionKey, { flow: CONTAZUL_UPDATE_FLOW, step: "tenant", slots: {} });
       return promptContaAzulTenant(input.registry, CONTAZUL_UPDATE_FLOW);
@@ -164,6 +169,15 @@ export async function runInteractiveFlowTurn(input: InteractiveFlowInput): Promi
     return continueContaAzulUpdateFlow(input, sessionKey, state, marker);
   }
 
+  if (marker.flow === CONTAZUL_CREATE_CUSTOMER_FLOW) {
+    const state = existing ?? {
+      flow: CONTAZUL_CREATE_CUSTOMER_FLOW,
+      step: "tenant" as const,
+      slots: {}
+    };
+    return continueContaAzulCreateCustomerFlow(input, sessionKey, state, marker);
+  }
+
   if (marker.flow === CONTAZUL_FLOW) {
     const state = existing ?? {
       flow: CONTAZUL_FLOW,
@@ -187,6 +201,10 @@ export async function runInteractiveFlowTurn(input: InteractiveFlowInput): Promi
 
   if (existing?.flow === CONTAZUL_UPDATE_FLOW) {
     return continueContaAzulUpdateFlow(input, sessionKey, existing, marker);
+  }
+
+  if (existing?.flow === CONTAZUL_CREATE_CUSTOMER_FLOW) {
+    return continueContaAzulCreateCustomerFlow(input, sessionKey, existing, marker);
   }
 
   if (!looksLikeContaAzulServiceBoletoRequest(input.request)) {
@@ -836,6 +854,165 @@ async function collectContaAzulUpdateDueDateAndPlan(
 function formatIsoToBr(iso: string): string {
   const parts = iso.split("-");
   return parts.length === 3 ? `${parts[2]}/${parts[1]}/${parts[0]}` : iso;
+}
+
+const CUSTOMER_FIELDS: { key: string; question: string; required: boolean; onlyIf?: "Jurídica" }[] = [
+  { key: "document", question: "Informe o CPF (Física) ou CNPJ (Jurídica).", required: true },
+  { key: "companyName", question: "Qual a razão social?", required: true, onlyIf: "Jurídica" },
+  { key: "name", question: "Qual o nome completo (ou nome fantasia)?", required: true },
+  { key: "email", question: "Qual o e-mail do cliente? (ou 'pular')", required: false },
+  { key: "cellPhone", question: "Qual o celular com DDD? (ou 'pular')", required: false },
+  { key: "commercialPhone", question: "Qual o telefone comercial? (ou 'pular')", required: false },
+  { key: "zipcode", question: "Qual o CEP? (ou 'pular')", required: false },
+  { key: "street", question: "Qual a rua/avenida? (ou 'pular')", required: false },
+  { key: "numberAddress", question: "Qual o número? (ou 'pular')", required: false },
+  { key: "neighborhood", question: "Qual o bairro? (ou 'pular')", required: false },
+  { key: "complement", question: "Qual o complemento? (ou 'pular')", required: false },
+  { key: "billingEmail", question: "Qual o e-mail de cobrança?", required: true },
+  { key: "billingPhone", question: "Qual o telefone de cobrança?", required: true }
+];
+
+function customerFieldsFor(personType: string): typeof CUSTOMER_FIELDS {
+  return CUSTOMER_FIELDS.filter((field) => !field.onlyIf || field.onlyIf === personType);
+}
+
+async function continueContaAzulCreateCustomerFlow(
+  input: InteractiveFlowInput,
+  sessionKey: string,
+  state: InteractiveFlowState,
+  marker: InteractiveMarker
+): Promise<InteractiveFlowResult> {
+  if (marker.action === "select_tenant") {
+    const relationId = stringValue(input.params?.relationId);
+    if (!relationId) {
+      return { handled: true, result: blocked("Empresa sem relationId.") };
+    }
+    const sw = await executeTool<unknown>(input.registry, "contaazul.switch_to_pro_session", { relationId });
+    if (sw.status !== "succeeded") {
+      return { handled: true, result: blocked(sw.summary) };
+    }
+    state.slots = {
+      ...state.slots,
+      tenantId: input.params?.tenantId,
+      relationId,
+      tenantName: stringValue(input.params?.tenantName)
+    };
+    state.step = "customerPersonType";
+    input.store.set(sessionKey, state);
+    return {
+      handled: true,
+      result: needsInput({
+        toolName: CONTAZUL_CREATE_CUSTOMER_TOOL_NAME,
+        summary: "Empresa selecionada.",
+        missingFields: ["personType"],
+        questions: ["O cliente é Pessoa Física ou Jurídica?"],
+        choices: [
+          {
+            id: "person:fisica",
+            label: "Física",
+            params: {
+              __interactive: { flow: CONTAZUL_CREATE_CUSTOMER_FLOW, action: "select_person_type" },
+              personType: "Física"
+            }
+          },
+          {
+            id: "person:juridica",
+            label: "Jurídica",
+            params: {
+              __interactive: { flow: CONTAZUL_CREATE_CUSTOMER_FLOW, action: "select_person_type" },
+              personType: "Jurídica"
+            }
+          }
+        ]
+      })
+    };
+  }
+  if (marker.action === "select_person_type") {
+    state.slots = { ...state.slots, personType: stringValue(input.params?.personType), fieldIndex: 0 };
+    state.step = "customerField";
+    input.store.set(sessionKey, state);
+    return askCustomerField(state, 0);
+  }
+  if (state.step === "tenant") return promptContaAzulTenant(input.registry, CONTAZUL_CREATE_CUSTOMER_FLOW);
+  if (state.step === "customerField") return collectCustomerField(input, state, sessionKey);
+  return promptContaAzulTenant(input.registry, CONTAZUL_CREATE_CUSTOMER_FLOW);
+}
+
+function askCustomerField(state: InteractiveFlowState, index: number): InteractiveFlowResult {
+  const fields = customerFieldsFor(String(state.slots.personType));
+  const field = fields[index]!;
+  return {
+    handled: true,
+    result: needsInput({
+      toolName: CONTAZUL_CREATE_CUSTOMER_TOOL_NAME,
+      summary: "Cadastro de cliente.",
+      missingFields: [field.key],
+      questions: [field.question]
+    })
+  };
+}
+
+async function collectCustomerField(
+  input: InteractiveFlowInput,
+  state: InteractiveFlowState,
+  sessionKey: string
+): Promise<InteractiveFlowResult> {
+  const fields = customerFieldsFor(String(state.slots.personType));
+  const index = Number(state.slots.fieldIndex ?? 0);
+  const field = fields[index]!;
+  const raw = input.request.trim();
+  const skipped = !field.required && /^pular$/i.test(raw);
+  if (field.required && !raw) return askCustomerField(state, index);
+  if (!skipped) state.slots = { ...state.slots, [field.key]: raw };
+  const nextIndex = index + 1;
+  if (nextIndex < fields.length) {
+    state.slots = { ...state.slots, fieldIndex: nextIndex };
+    input.store.set(sessionKey, state);
+    return askCustomerField(state, nextIndex);
+  }
+  input.store.delete(sessionKey);
+  const params = createCustomerWorkflowParams(state.slots);
+  const receipt = await executeTool<unknown>(input.registry, "contaazul.create_customer_workflow", params);
+  const operationId = operationIdFromReceipt(receipt);
+  return {
+    handled: true,
+    draftOperationId: receipt.status === "planned" ? operationId : undefined,
+    draft: receipt.status === "planned" ? { operationId, toolName: receipt.toolName, params } : undefined,
+    result: {
+      status: "executed",
+      provider: "contaazul",
+      intent: "create_customer",
+      toolName: receipt.toolName,
+      operationId,
+      receiptStatus: receipt.status,
+      summary: receipt.status === "planned" ? "Dry-run preparado para revisão." : receipt.summary,
+      missingFields: [],
+      questions: [],
+      warnings: receipt.warnings,
+      approvalAvailable: receipt.status === "planned",
+      receiptData: receipt.data
+    }
+  };
+}
+
+function createCustomerWorkflowParams(slots: Record<string, unknown>): Record<string, unknown> {
+  return {
+    tenantId: slots.tenantId,
+    personType: slots.personType,
+    document: slots.document,
+    name: slots.name,
+    companyName: slots.companyName,
+    email: slots.email,
+    commercialPhone: slots.commercialPhone,
+    cellPhone: slots.cellPhone,
+    zipcode: slots.zipcode,
+    street: slots.street,
+    numberAddress: slots.numberAddress,
+    neighborhood: slots.neighborhood,
+    complement: slots.complement,
+    billingEmail: slots.billingEmail,
+    billingPhone: slots.billingPhone
+  };
 }
 
 function promptBoletoProvider(): InteractiveFlowResult {
