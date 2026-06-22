@@ -337,6 +337,7 @@ const LIVE_APPROVAL_TOOL_ALLOWLIST = new Set([
   "asaas.update_charge_due_date",
   "contaazul.create_service_sale_boleto_workflow",
   "contaazul.update_due_date_reissue_boleto_workflow",
+  "contaazul.create_customer_workflow",
   "contaazul.acknowledge_orphan_cleanup"
 ]);
 

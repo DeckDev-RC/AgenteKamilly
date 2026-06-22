@@ -1054,6 +1054,30 @@ async function continueContaAzulFlow(
   state: InteractiveFlowState,
   marker: InteractiveMarker
 ): Promise<InteractiveFlowResult> {
+  if (marker.action === "start_with_customer") {
+    const relationId = stringValue(input.params?.relationId);
+    if (relationId) {
+      await executeTool<unknown>(input.registry, "contaazul.switch_to_pro_session", { relationId });
+    }
+    state.slots = {
+      ...state.slots,
+      tenantId: input.params?.tenantId,
+      relationId,
+      customerId: stringValue(input.params?.customerId),
+      customerName: stringValue(input.params?.customerName)
+    };
+    state.step = "categorySearch";
+    input.store.set(sessionKey, state);
+    return {
+      handled: true,
+      result: needsInput({
+        summary: `Cliente ${state.slots.customerName ?? ""} selecionado. Agora a categoria financeira.`,
+        missingFields: ["categorySearch"],
+        questions: ["Digite o nome da categoria financeira."]
+      })
+    };
+  }
+
   if (marker.action === "select_tenant") {
     const tenantId = input.params?.tenantId;
     const relationId = stringValue(input.params?.relationId);

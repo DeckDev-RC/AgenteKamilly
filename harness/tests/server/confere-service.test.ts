@@ -446,6 +446,38 @@ describe("confere service", () => {
     expect(response.status).toBe("executed");
   });
 
+  it("allows live execution of the Conta Azul create-customer workflow", async () => {
+    const registry = createToolRegistry();
+    registry.register({
+      name: "contaazul.create_customer_workflow",
+      description: "create customer",
+      parameters: z.object({}).passthrough(),
+      execute: async () =>
+        ({
+          ...plannedReceipt("contaazul.create_customer_workflow", "op_newcust"),
+          status: "succeeded",
+          dryRun: false
+        }) satisfies ToolReceipt
+    });
+
+    const service = await createConfereService({
+      cwd: await mkdtemp(path.join(os.tmpdir(), "confere-service-")),
+      env: { RUNTIME_MODE: "dry-run", ALLOW_LIVE_MUTATIONS: "true" },
+      registryFactory: async () => ({ registry, warnings: [] }),
+      modelProvider: createFakeModelProvider({})
+    });
+    service.saveDraftForTest({
+      operationId: "op_newcust",
+      toolName: "contaazul.create_customer_workflow",
+      request: "cadastrar cliente",
+      params: { tenantId: 3047702, personType: "Física", document: "123" },
+      createdAt: "2026-06-20T12:00:00.000Z"
+    });
+
+    const response = await service.executeApprovedOperation({ operationId: "op_newcust" });
+    expect(response.status).toBe("executed");
+  });
+
   it("blocks live execution when no draft exists", async () => {
     const service = await createConfereService({
       cwd: await mkdtemp(path.join(os.tmpdir(), "confere-service-")),

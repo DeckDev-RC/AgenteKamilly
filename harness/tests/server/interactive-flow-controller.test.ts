@@ -846,6 +846,21 @@ describe("interactive flow controller", () => {
     expect(planned.draftOperationId).toBe("op_ca_update");
     expect(calls).toEqual([{ tenantId: 3047702, financialEventId: "fe_1", installmentId: "inst_1", dueDateIso: "2026-07-20" }]);
   });
+
+  it("opens the boleto flow at the category step when pre-seeded with a customer", async () => {
+    const store = createInteractiveFlowStore();
+    const registry = createToolRegistry();
+    registerTenantTools(registry);
+    registerSearchTools(registry);
+    const result = await runInteractiveFlowTurn({
+      request: "Emitir boleto de serviço",
+      registry, sessionId: "sess_seed", store,
+      params: { __interactive: { flow: "contaazul_service_sale_boleto", action: "start_with_customer" }, tenantId: 3047702, relationId: "rel_mais", customerId: "new_cust", customerName: "MARIA SILVA" }
+    });
+    expect(result.handled).toBe(true);
+    if (!result.handled) throw new Error("expected handled result");
+    expect(result.result).toMatchObject({ missingFields: ["categorySearch"], questions: ["Digite o nome da categoria financeira."] });
+  });
 });
 
 function registerTenantTools(registry: ReturnType<typeof createToolRegistry>): void {
