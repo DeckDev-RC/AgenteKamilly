@@ -53,6 +53,18 @@ export type AgentResultView = {
   confidence?: number;
   approvalAvailable: boolean;
   reason?: string;
+  candidates?: string[];
+  choices?: AgentChoiceView[];
+  fieldName?: string;
+  receiptData?: unknown;
+};
+
+export type AgentChoiceView = {
+  id: string;
+  label: string;
+  description?: string;
+  request?: string;
+  params?: Record<string, unknown>;
 };
 
 export type ExecuteOperationApiRequest = {

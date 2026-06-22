@@ -22,7 +22,7 @@ export function SlimRail(props: {
       <aside className="rail" aria-label="Confere navegação principal">
         <div className="rail__pixelyn">
           <PixelynAvatar state={props.pixelynState} size={40} />
-          <span className="rail__alive">viva</span>
+          <span className="rail__alive">Confere</span>
         </div>
         <nav className="rail__nav">
           {DESTINATIONS.map((dest) => {

@@ -69,6 +69,7 @@ export async function createConfereService(
 ): Promise<ConfereService> {
   const cwd = resolveConfigCwd(options.cwd ?? process.cwd());
   loadDotenv({ path: path.resolve(cwd, ".env"), override: false, quiet: true });
+  loadDotenv({ path: path.resolve(cwd, "contaazul/.env"), override: false, quiet: true });
   const baseEnv = { ...process.env, ...(options.env ?? {}) };
   // Persist Pro-session tokens across agent turns. runtime() rebuilds the tool
   // registry every turn, so without a shared store the session switched on the

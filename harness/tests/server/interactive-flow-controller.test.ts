@@ -577,7 +577,9 @@ describe("interactive flow controller", () => {
     if (!replyToPrompt.handled) throw new Error("expected handled result");
     expect(replyToPrompt.result).toMatchObject({
       missingFields: ["notification.replyTo"],
-      questions: ["Digite o e-mail para o destinatário entrar em contato."]
+      questions: [
+        "Digite o e-mail para o destinatário entrar em contato (deixe em branco para usar o padrão do harness)."
+      ]
     });
 
     const planned = await runInteractiveFlowTurn({

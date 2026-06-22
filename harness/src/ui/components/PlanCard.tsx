@@ -1,3 +1,4 @@
+import { ClipboardCheck, ShieldCheck } from "lucide-react";
 import { useState } from "react";
 import type { ReactElement } from "react";
 
@@ -26,6 +27,19 @@ export function PlanCard(props: {
 
   return (
     <div className="plan-card">
+      <header className="plan-card__header">
+        <div className="plan-card__icon" aria-hidden="true">
+          <ClipboardCheck size={18} />
+        </div>
+        <div>
+          <h2>Plano pronto para revisão</h2>
+          <p>Dry-run concluído. Revise os dados antes da execução real.</p>
+        </div>
+        <span className="plan-card__safe">
+          <ShieldCheck aria-hidden="true" size={14} />
+          protegido
+        </span>
+      </header>
       <dl className="plan-card__facts">
         {rows
           .filter(([, value]) => Boolean(value))
@@ -38,7 +52,7 @@ export function PlanCard(props: {
       </dl>
       <div className="plan-card__actions">
         <ActionButton disabled={!props.approvalAvailable} onClick={props.onApprove} variant="primary">
-          Aprovar execução
+          Revisar e aprovar
         </ActionButton>
         {props.technicalDetail ? (
           <button

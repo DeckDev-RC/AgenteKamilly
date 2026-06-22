@@ -23,11 +23,31 @@ import {
 } from "./client.js";
 import { parseAccountancyClients, parseFinancialStatementItems } from "./parsers.js";
 
+export class AmbiguityError extends Error {
+  constructor(
+    message: string,
+    public readonly candidates: string[],
+    public readonly fieldName: string
+  ) {
+    super(message);
+    this.name = "AmbiguityError";
+  }
+}
+
+
 const LIST_ACCOUNTANCY_CLIENTS_TOOL = "contaazul.list_accountancy_clients";
 const SWITCH_TO_PRO_SESSION_TOOL = "contaazul.switch_to_pro_session";
 const SEARCH_FINANCIAL_STATEMENT_TOOL = "contaazul.search_financial_statement";
+const SEARCH_SALE_CUSTOMERS_TOOL = "contaazul.search_sale_customers";
+const SEARCH_FINANCIAL_CATEGORIES_TOOL = "contaazul.search_financial_categories";
+const SEARCH_SERVICE_ITEMS_TOOL = "contaazul.search_service_items";
+const GET_PERSON_DETAILS_TOOL = "contaazul.get_person_details";
+/** Legacy default mirrored from contaazul/interativo.js */
+const CONTAAZUL_LEGACY_FINANCIAL_ACCOUNT_ID = "cf6eedce-10e8-4554-b707-9246826b12c6";
 const UPDATE_DUE_DATE_REISSUE_BOLETO_TOOL = "contaazul.update_due_date_reissue_boleto";
+const UPDATE_DUE_DATE_REISSUE_BOLETO_WORKFLOW_TOOL = "contaazul.update_due_date_reissue_boleto_workflow";
 const CREATE_CUSTOMER_TOOL = "contaazul.create_customer";
+const CREATE_CUSTOMER_WORKFLOW_TOOL = "contaazul.create_customer_workflow";
 const ACKNOWLEDGE_ORPHAN_CLEANUP_TOOL = "contaazul.acknowledge_orphan_cleanup";
 const CREATE_SERVICE_SALE_AND_ISSUE_BOLETO_TOOL =
   "contaazul.create_service_sale_and_issue_boleto";
@@ -50,6 +70,26 @@ export const ContaAzulSearchFinancialStatementParamsSchema = z.object({
   query: z.string().optional()
 });
 
+export const ContaAzulSearchSaleCustomersParamsSchema = z.object({
+  relationId: z.string().min(1),
+  searchTerm: z.string().min(1)
+});
+
+export const ContaAzulSearchFinancialCategoriesParamsSchema = z.object({
+  relationId: z.string().min(1),
+  searchTerm: z.string().min(1)
+});
+
+export const ContaAzulSearchServiceItemsParamsSchema = z.object({
+  relationId: z.string().min(1),
+  searchTerm: z.string().min(1)
+});
+
+export const ContaAzulGetPersonDetailsParamsSchema = z.object({
+  relationId: z.string().min(1),
+  personUuid: z.string().min(1)
+});
+
 const ApprovalFieldsSchema = z.object({
   operationId: z.string().optional(),
   approvalText: z.string().optional()
@@ -66,6 +106,15 @@ export const ContaAzulUpdateDueDateReissueBoletoParamsSchema = ApprovalFieldsSch
   installmentVersion: z.number().int().nonnegative(),
   installmentIndex: z.number().int().positive(),
   activeChargeRequests: z.array(z.unknown()).optional(),
+  financialAccountId: z.string().optional()
+});
+
+export const ContaAzulUpdateDueDateReissueBoletoWorkflowParamsSchema = ApprovalFieldsSchema.extend({
+  tenantId: z.union([z.string().min(1), z.number()]),
+  financialEventId: z.string().min(1),
+  installmentId: z.string().min(1),
+  dueDateIso: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  email: z.string().email().optional(),
   financialAccountId: z.string().optional()
 });
 
@@ -100,6 +149,26 @@ export const ContaAzulCreateCustomerParamsSchema = ApprovalFieldsSchema.extend({
     address: ContaAzulAddressSchema
   })
 });
+
+export const ContaAzulCreateCustomerWorkflowParamsSchema = ApprovalFieldsSchema.extend({
+  tenantId: z.union([z.string().min(1), z.number()]),
+  personType: z.enum(["Física", "Jurídica"]),
+  document: z.string().min(1),
+  name: z.string().optional(),
+  companyName: z.string().optional(),
+  email: z.string().optional(),
+  commercialPhone: z.string().optional(),
+  cellPhone: z.string().optional(),
+  zipcode: z.string().optional(),
+  street: z.string().optional(),
+  numberAddress: z.string().optional(),
+  neighborhood: z.string().optional(),
+  complement: z.string().optional(),
+  billingEmail: z.string().optional(),
+  billingPhone: z.string().optional(),
+  createBoleto: z.boolean().optional().default(false)
+});
+
 
 export const ContaAzulAcknowledgeOrphanCleanupParamsSchema = ApprovalFieldsSchema.extend({
   previousOperationId: z.string().min(1),
@@ -173,6 +242,15 @@ export type ContaAzulSwitchToProSessionParams = z.input<
 export type ContaAzulSearchFinancialStatementParams = z.input<
   typeof ContaAzulSearchFinancialStatementParamsSchema
 >;
+export type ContaAzulSearchSaleCustomersParams = z.input<
+  typeof ContaAzulSearchSaleCustomersParamsSchema
+>;
+export type ContaAzulSearchFinancialCategoriesParams = z.input<
+  typeof ContaAzulSearchFinancialCategoriesParamsSchema
+>;
+export type ContaAzulSearchServiceItemsParams = z.input<
+  typeof ContaAzulSearchServiceItemsParamsSchema
+>;
 export type ContaAzulUpdateDueDateReissueBoletoParams = z.input<
   typeof ContaAzulUpdateDueDateReissueBoletoParamsSchema
 >;
@@ -201,6 +279,18 @@ export type ContaAzulReadTools = {
   searchFinancialStatement(
     params: ContaAzulSearchFinancialStatementParams
   ): Promise<ToolReceipt<FinancialStatementItem[]>>;
+  searchSaleCustomers(
+    params: ContaAzulSearchSaleCustomersParams
+  ): Promise<ToolReceipt<unknown[]>>;
+  searchFinancialCategories(
+    params: ContaAzulSearchFinancialCategoriesParams
+  ): Promise<ToolReceipt<unknown[]>>;
+  searchServiceItems(
+    params: ContaAzulSearchServiceItemsParams
+  ): Promise<ToolReceipt<unknown[]>>;
+  getPersonDetails(
+    params: z.infer<typeof ContaAzulGetPersonDetailsParamsSchema>
+  ): Promise<ToolReceipt<Record<string, unknown>>>;
 };
 
 export type ContaAzulPlannedMappedRequest = {
@@ -224,13 +314,27 @@ export type ContaAzulMutationPlan = {
   idempotencyKey?: string;
 };
 
+export type ContaAzulCreateCustomerWorkflowParams = z.input<
+  typeof ContaAzulCreateCustomerWorkflowParamsSchema
+>;
+
+export type ContaAzulUpdateDueDateReissueBoletoWorkflowParams = z.input<
+  typeof ContaAzulUpdateDueDateReissueBoletoWorkflowParamsSchema
+>;
+
 export type ContaAzulMutationTools = {
   updateDueDateReissueBoleto(
     params: ContaAzulUpdateDueDateReissueBoletoParams
   ): Promise<ToolReceipt<ContaAzulMutationPlan>>;
+  updateDueDateReissueBoletoWorkflow(
+    params: ContaAzulUpdateDueDateReissueBoletoWorkflowParams
+  ): Promise<ToolReceipt<ContaAzulMutationPlan>>;
   createCustomer(
     params: ContaAzulCreateCustomerParams
   ): Promise<ToolReceipt<ContaAzulMutationPlan>>;
+  createCustomerWorkflow(
+    params: ContaAzulCreateCustomerWorkflowParams
+  ): Promise<ToolReceipt<any>>;
   acknowledgeOrphanCleanup(
     params: ContaAzulAcknowledgeOrphanCleanupParams
   ): Promise<ToolReceipt<ContaAzulMutationPlan>>;
@@ -392,6 +496,195 @@ export function createContaAzulReadTools(
           error
         });
       }
+    },
+
+    async searchSaleCustomers(rawParams) {
+      const params = ContaAzulSearchSaleCustomersParamsSchema.parse(rawParams);
+      const operationId = createOperationId(SEARCH_SALE_CUSTOMERS_TOOL);
+      const authToken = proSessions.get(params.relationId);
+
+      const blocked = await blockIfReadProSessionMissing(
+        {
+          ledgerPath: options.ledgerPath,
+          operationId,
+          runtimeMode,
+          toolName: SEARCH_SALE_CUSTOMERS_TOOL,
+          args: params,
+          authToken
+        },
+        []
+      );
+      if (blocked) return blocked;
+
+      try {
+        const data = await options.client.searchSaleCustomers({
+          authToken: authToken!,
+          searchTerm: params.searchTerm
+        });
+        return writeReceipt({
+          ledgerPath: options.ledgerPath,
+          operationId,
+          runtimeMode,
+          toolName: SEARCH_SALE_CUSTOMERS_TOOL,
+          status: "succeeded",
+          summary: `Encontrados ${data.length} cliente(s) no Conta Azul.`,
+          args: params,
+          data,
+          responseSummary: { itemCount: data.length }
+        });
+      } catch (error) {
+        return writeErrorReceipt({
+          ledgerPath: options.ledgerPath,
+          operationId,
+          runtimeMode,
+          toolName: SEARCH_SALE_CUSTOMERS_TOOL,
+          args: params,
+          error
+        });
+      }
+    },
+
+    async searchFinancialCategories(rawParams) {
+      const params = ContaAzulSearchFinancialCategoriesParamsSchema.parse(rawParams);
+      const operationId = createOperationId(SEARCH_FINANCIAL_CATEGORIES_TOOL);
+      const authToken = proSessions.get(params.relationId);
+
+      const blocked = await blockIfReadProSessionMissing(
+        {
+          ledgerPath: options.ledgerPath,
+          operationId,
+          runtimeMode,
+          toolName: SEARCH_FINANCIAL_CATEGORIES_TOOL,
+          args: params,
+          authToken
+        },
+        []
+      );
+      if (blocked) return blocked;
+
+      try {
+        const data = await options.client.searchFinancialCategories({
+          authToken: authToken!,
+          searchTerm: params.searchTerm
+        });
+        return writeReceipt({
+          ledgerPath: options.ledgerPath,
+          operationId,
+          runtimeMode,
+          toolName: SEARCH_FINANCIAL_CATEGORIES_TOOL,
+          status: "succeeded",
+          summary: `Encontradas ${data.length} categoria(s) financeira(s) no Conta Azul.`,
+          args: params,
+          data,
+          responseSummary: { itemCount: data.length }
+        });
+      } catch (error) {
+        return writeErrorReceipt({
+          ledgerPath: options.ledgerPath,
+          operationId,
+          runtimeMode,
+          toolName: SEARCH_FINANCIAL_CATEGORIES_TOOL,
+          args: params,
+          error
+        });
+      }
+    },
+
+    async searchServiceItems(rawParams) {
+      const params = ContaAzulSearchServiceItemsParamsSchema.parse(rawParams);
+      const operationId = createOperationId(SEARCH_SERVICE_ITEMS_TOOL);
+      const authToken = proSessions.get(params.relationId);
+
+      const blocked = await blockIfReadProSessionMissing(
+        {
+          ledgerPath: options.ledgerPath,
+          operationId,
+          runtimeMode,
+          toolName: SEARCH_SERVICE_ITEMS_TOOL,
+          args: params,
+          authToken
+        },
+        []
+      );
+      if (blocked) return blocked;
+
+      try {
+        const data = await options.client.searchServiceItems({
+          authToken: authToken!,
+          searchTerm: params.searchTerm
+        });
+        return writeReceipt({
+          ledgerPath: options.ledgerPath,
+          operationId,
+          runtimeMode,
+          toolName: SEARCH_SERVICE_ITEMS_TOOL,
+          status: "succeeded",
+          summary: `Encontrados ${data.length} item(ns) de servico no Conta Azul.`,
+          args: params,
+          data,
+          responseSummary: { itemCount: data.length }
+        });
+      } catch (error) {
+        return writeErrorReceipt({
+          ledgerPath: options.ledgerPath,
+          operationId,
+          runtimeMode,
+          toolName: SEARCH_SERVICE_ITEMS_TOOL,
+          args: params,
+          error
+        });
+      }
+    },
+
+    async getPersonDetails(rawParams) {
+      const params = ContaAzulGetPersonDetailsParamsSchema.parse(rawParams);
+      const operationId = createOperationId(GET_PERSON_DETAILS_TOOL);
+      const authToken = proSessions.get(params.relationId);
+
+      const blocked = await blockIfReadProSessionMissing(
+        {
+          ledgerPath: options.ledgerPath,
+          operationId,
+          runtimeMode,
+          toolName: GET_PERSON_DETAILS_TOOL,
+          args: params,
+          authToken
+        },
+        {}
+      );
+      if (blocked) return blocked;
+
+      try {
+        const data = asRecord(
+          await options.client.getPersonDetails({
+            authToken: authToken!,
+            personUuid: params.personUuid
+          })
+        ) ?? {};
+        return writeReceipt({
+          ledgerPath: options.ledgerPath,
+          operationId,
+          runtimeMode,
+          toolName: GET_PERSON_DETAILS_TOOL,
+          status: "succeeded",
+          summary: "Detalhes do cliente carregados no Conta Azul.",
+          args: params,
+          data,
+          responseSummary: {
+            personUuid: params.personUuid,
+            name: stringField(data, "name")
+          }
+        });
+      } catch (error) {
+        return writeErrorReceipt({
+          ledgerPath: options.ledgerPath,
+          operationId,
+          runtimeMode,
+          toolName: GET_PERSON_DETAILS_TOOL,
+          args: params,
+          error
+        });
+      }
     }
   };
 }
@@ -405,6 +698,108 @@ export function createContaAzulMutationTools(
   const proSessions = options.proSessionStore ?? new Map<string, string>();
 
   return {
+    async updateDueDateReissueBoletoWorkflow(rawParams) {
+      const params = ContaAzulUpdateDueDateReissueBoletoWorkflowParamsSchema.parse(rawParams);
+      const operationId = params.operationId ?? createOperationId(UPDATE_DUE_DATE_REISSUE_BOLETO_WORKFLOW_TOOL);
+
+      try {
+        const accountancyClients = parseAccountancyClients(await options.client.listAccountancyClients());
+        const accountancyClient = pickByField({
+          label: "Conta Azul Mais tenant",
+          items: accountancyClients,
+          expected: String(params.tenantId),
+          field: (item) => `${item.tenantId} | ${item.name}`
+        });
+
+        const session = await options.client.switchToProSession(accountancyClient.relationId);
+        proSessions.set(accountancyClient.relationId, session.authToken);
+
+        // Fetch details of the financial event
+        const detalhes = (await options.client.getFinancialEventDetails({
+          authToken: session.authToken,
+          financialEventId: params.financialEventId
+        })) as any;
+
+        const targetInstallmentId = params.installmentId;
+        const installment = (detalhes.paymentCondition?.installments || []).find(
+          (i: any) => i.id === targetInstallmentId
+        );
+
+        if (!installment) {
+          throw new Error(`Parcela ${params.installmentId} não encontrada nos detalhes do lançamento.`);
+        }
+
+        const installmentVersion = installment.version;
+        const installmentIndex = installment.index || 1;
+        const value = installment.value || detalhes.value;
+        const originalDescription = detalhes.description || detalhes.categoryName || "";
+        const activeChargeRequests = (installment.chargeRequests || []).filter(
+          (c: any) => c.status !== "CANCELED"
+        );
+        const financialAccountId = resolveFinancialAccountId(
+          params.financialAccountId,
+          options.config.financialAccountId,
+          typeof installment.financialAccount?.id === "string"
+            ? installment.financialAccount.id
+            : undefined
+        );
+
+        let email = params.email;
+        if (!email) {
+          try {
+            const billingInfo = (await options.client.getBillingContact({
+              authToken: session.authToken,
+              personId: detalhes.negotiatorId
+            })) as any;
+            email = billingInfo.emails?.[0] || detalhes.negotiator?.email || "";
+          } catch (err) {
+            email = detalhes.negotiator?.email || "";
+          }
+        }
+
+        if (!email) {
+          throw new Error("O e-mail para envio da cobrança é obrigatório e não foi encontrado no cadastro do cliente.");
+        }
+
+        const nestedTools = createContaAzulMutationTools({
+          ...options,
+          proSessionStore: proSessions,
+          operationIdFactory: () => operationId
+        });
+
+        const receipt = await nestedTools.updateDueDateReissueBoleto({
+          relationId: accountancyClient.relationId,
+          financialEventId: params.financialEventId,
+          installmentId: params.installmentId,
+          dueDateIso: params.dueDateIso,
+          email,
+          value,
+          originalDescription,
+          installmentVersion,
+          installmentIndex,
+          activeChargeRequests,
+          financialAccountId,
+          approvalText: params.approvalText
+        });
+
+        return {
+          ...receipt,
+          toolName: UPDATE_DUE_DATE_REISSUE_BOLETO_WORKFLOW_TOOL,
+          summary: `Workflow de alteração de vencimento resolvido. ${receipt.summary}`,
+          data: receipt.data
+        };
+      } catch (error) {
+        return writeErrorReceipt({
+          ledgerPath: options.ledgerPath,
+          operationId,
+          runtimeMode,
+          toolName: UPDATE_DUE_DATE_REISSUE_BOLETO_WORKFLOW_TOOL,
+          args: params,
+          error
+        });
+      }
+    },
+
     async updateDueDateReissueBoleto(rawParams) {
       const params = ContaAzulUpdateDueDateReissueBoletoParamsSchema.parse(rawParams);
       const operationId =
@@ -582,17 +977,285 @@ export function createContaAzulMutationTools(
         throw new Error("Conta Azul Pro session unexpectedly missing after validation.");
       }
 
-      const result = await options.client.createCustomer({ authToken, payload });
-      return writeMutationReceipt({
-        ledgerPath: options.ledgerPath,
-        operationId,
-        runtimeMode,
-        toolName: CREATE_CUSTOMER_TOOL,
-        status: "succeeded",
-        summary: "Cliente criado no Conta Azul.",
-        args: params,
-        data: { ...data, result }
-      });
+      try {
+        const result = await options.client.createCustomer({ authToken, payload });
+        return writeMutationReceipt({
+          ledgerPath: options.ledgerPath,
+          operationId,
+          runtimeMode,
+          toolName: CREATE_CUSTOMER_TOOL,
+          status: "succeeded",
+          summary: "Cliente criado no Conta Azul.",
+          args: params,
+          data: { ...data, result }
+        });
+      } catch (error) {
+        const errMessage = error instanceof Error ? error.message : "";
+        if (errMessage.includes("já está cadastrado") || errMessage.includes("400")) {
+          const cleanDoc = (params.person.legalDocument || params.person.naturalDocument || "").replace(/\D/g, "");
+          if (cleanDoc) {
+            try {
+              const existing = await options.client.searchSaleCustomers({
+                authToken,
+                searchTerm: cleanDoc
+              });
+              const match = (existing as any[]).find(c => {
+                const doc = (c.document || "").replace(/\D/g, "");
+                return doc === cleanDoc;
+              }) || existing[0];
+              if (match) {
+                const warning = `O cliente com documento já está cadastrado no sistema como "${match.name}".`;
+                return writeMutationReceipt({
+                  ledgerPath: options.ledgerPath,
+                  operationId,
+                  runtimeMode,
+                  toolName: CREATE_CUSTOMER_TOOL,
+                  status: "succeeded",
+                  summary: warning,
+                  args: params,
+                  data: {
+                    ...data,
+                    result: { uuid: match.id, name: match.name, alreadyExists: true }
+                  },
+                  warnings: [warning]
+                });
+              }
+            } catch (searchErr) {
+              // ignore search error and fall through
+            }
+          }
+        }
+        return writeErrorReceipt({
+          ledgerPath: options.ledgerPath,
+          operationId,
+          runtimeMode,
+          toolName: CREATE_CUSTOMER_TOOL,
+          args: params,
+          error
+        });
+      }
+    },
+
+    async createCustomerWorkflow(rawParams) {
+      const params = ContaAzulCreateCustomerWorkflowParamsSchema.parse(rawParams);
+      const operationId = params.operationId ?? createOperationId(CREATE_CUSTOMER_WORKFLOW_TOOL);
+
+      try {
+        const accountancyClients = parseAccountancyClients(await options.client.listAccountancyClients());
+        const accountancyClient = pickByField({
+          label: "Conta Azul Mais tenant",
+          items: accountancyClients,
+          expected: String(params.tenantId),
+          field: (item) => `${item.tenantId} | ${item.name}`
+        });
+
+        const session = await options.client.switchToProSession(accountancyClient.relationId);
+        proSessions.set(accountancyClient.relationId, session.authToken);
+
+        const cleanDoc = params.document.replace(/\D/g, "");
+        const existing = await options.client.searchSaleCustomers({
+          authToken: session.authToken,
+          searchTerm: cleanDoc
+        });
+        const match = (existing as any[]).find(c => {
+          const doc = (c.document || "").replace(/\D/g, "");
+          return doc === cleanDoc;
+        }) || existing[0];
+
+        if (match && (match.document || "").replace(/\D/g, "") === cleanDoc) {
+          const warning = `O cliente com documento ${params.document} já está cadastrado no sistema como "${match.name}".`;
+          return writeReceipt({
+            ledgerPath: options.ledgerPath,
+            operationId,
+            runtimeMode,
+            toolName: CREATE_CUSTOMER_WORKFLOW_TOOL,
+            status: runtimeMode === "dry-run" ? "planned" : "succeeded",
+            summary: warning,
+            args: params,
+            data: {
+              approvalPreview: {
+                operationId,
+                provider: "contaazul",
+                toolName: CREATE_CUSTOMER_WORKFLOW_TOOL,
+                action: "create",
+                target: { customerId: match.id, customerName: match.name },
+                changes: [],
+                irreversible: false,
+                rollbackNote: "Nenhuma ação necessária (cliente já cadastrado)."
+              },
+              plannedRequests: [],
+              resolved: {
+                customerId: match.id,
+                customerName: match.name,
+                alreadyExists: true
+              }
+            },
+            warnings: [warning]
+          });
+        }
+
+        let name = params.name;
+        let companyName = params.companyName;
+        let email = params.email;
+        let commercialPhone = params.commercialPhone;
+        let cellPhone = params.cellPhone;
+        let zipcode = params.zipcode;
+        let street = params.street;
+        let neighborhood = params.neighborhood;
+        let complement = params.complement;
+        let billingEmail = params.billingEmail;
+        let billingPhone = params.billingPhone;
+        let numberAddress = params.numberAddress;
+        let idCity: string | number | undefined;
+        let state: string | undefined;
+        let cityName: string | undefined;
+
+        if (params.personType === "Jurídica" && (!name || !zipcode || !billingEmail)) {
+          try {
+            const cnpjInfo = (await options.client.lookupCnpj({
+              authToken: session.authToken,
+              cnpj: cleanDoc
+            })) as Record<string, any>;
+            if (cnpjInfo) {
+              name = name || cnpjInfo.tradingName || cnpjInfo.companyName;
+              companyName = companyName || cnpjInfo.companyName;
+              email = email || cnpjInfo.email;
+              commercialPhone = commercialPhone || cnpjInfo.phoneNumber;
+              zipcode = zipcode || cnpjInfo.zipCode;
+              street = street || cnpjInfo.streetName;
+              numberAddress = numberAddress || cnpjInfo.numberAddress;
+              neighborhood = neighborhood || cnpjInfo.neighborhood;
+              state = state || cnpjInfo.state;
+              cityName = cityName || cnpjInfo.cityName;
+            }
+          } catch (cnpjErr) {
+            // ignore CNPJ lookup error
+          }
+        }
+
+        if (zipcode) {
+          try {
+            const cepInfo = (await options.client.lookupCep({
+              cep: zipcode
+            })) as Record<string, any>;
+            if (cepInfo) {
+              idCity = cepInfo.idCidade;
+              state = state || cepInfo.idEstado;
+              neighborhood = neighborhood || cepInfo.nmBairro;
+              street = street || cepInfo.nmEndereco;
+            }
+          } catch (cepErr) {
+            // ignore CEP lookup error
+          }
+        }
+
+        const missing: string[] = [];
+        if (!name) missing.push("name");
+        if (!zipcode) missing.push("zipcode");
+        if (!numberAddress) missing.push("numberAddress");
+        if (!billingEmail) {
+          if (email) {
+            billingEmail = email;
+          } else {
+            missing.push("billingEmail");
+          }
+        }
+        if (!idCity) {
+          missing.push("city");
+        }
+
+        if (missing.length > 0) {
+          const warning = `Campos obrigatórios ausentes: ${missing.join(", ")}. Por favor, forneça-los.`;
+          return writeReceipt({
+            ledgerPath: options.ledgerPath,
+            operationId,
+            runtimeMode,
+            toolName: CREATE_CUSTOMER_WORKFLOW_TOOL,
+            status: "failed",
+            summary: warning,
+            args: params,
+            data: {
+              resolved: {
+                name,
+                companyName,
+                email,
+                commercialPhone,
+                cellPhone,
+                zipcode,
+                street,
+                neighborhood,
+                complement,
+                billingEmail,
+                billingPhone,
+                numberAddress
+              }
+            },
+            warnings: [warning]
+          });
+        }
+
+        const address = {
+          zipcode: zipcode!.replace(/\D/g, ""),
+          neighborhood: neighborhood!,
+          numberAddress: numberAddress!,
+          state: state!,
+          city: idCity!,
+          address: street!,
+          complement: complement || "",
+          country: "Brasil",
+          idCity: idCity!
+        };
+
+        const person = {
+          personType: params.personType,
+          legalDocument: params.personType === "Jurídica" ? cleanDoc : "",
+          naturalDocument: params.personType === "Física" ? cleanDoc : "",
+          name: name!,
+          companyName: companyName || name!,
+          email: email || "",
+          commercialPhone: commercialPhone || "",
+          cellPhone: cellPhone || billingPhone || "",
+          billingEmail: billingEmail!,
+          billingPhone: billingPhone || "",
+          address
+        };
+
+        const nestedTools = createContaAzulMutationTools({
+          ...options,
+          proSessionStore: proSessions,
+          operationIdFactory: () => operationId
+        });
+        const receipt = await nestedTools.createCustomer({
+          relationId: accountancyClient.relationId,
+          person,
+          approvalText: params.approvalText
+        });
+
+        return {
+          ...receipt,
+          toolName: CREATE_CUSTOMER_WORKFLOW_TOOL,
+          summary: `Workflow de cadastro resolvido. ${receipt.summary}`,
+          data: receipt.data
+            ? {
+                ...receipt.data,
+                resolved: {
+                  customerId: (receipt.data.result as any)?.uuid ?? (receipt.data.result as any)?.id,
+                  customerName: person.name,
+                  createBoleto: params.createBoleto
+                }
+              }
+            : receipt.data
+        };
+      } catch (error) {
+        return writeErrorReceipt({
+          ledgerPath: options.ledgerPath,
+          operationId,
+          runtimeMode,
+          toolName: CREATE_CUSTOMER_WORKFLOW_TOOL,
+          args: params,
+          error
+        });
+      }
     },
 
     async acknowledgeOrphanCleanup(rawParams) {
@@ -757,40 +1420,88 @@ export function createContaAzulMutationTools(
       const params = ContaAzulCreateServiceSaleAndIssueBoletoParamsSchema.parse(rawParams);
       const operationId =
         params.operationId ?? createOperationId(CREATE_SERVICE_SALE_AND_ISSUE_BOLETO_TOOL);
-      const financialAccountId =
-        params.financialAccountId ?? options.config.financialAccountId;
-      if (!financialAccountId) {
-        const warning =
-          "Conta financeira nao configurada: defina CONTAAZUL_FINANCIAL_ACCOUNT_ID antes de criar venda ao vivo.";
-        return writeMutationReceipt({
-          ledgerPath: options.ledgerPath,
-          operationId,
-          runtimeMode,
-          toolName: CREATE_SERVICE_SALE_AND_ISSUE_BOLETO_TOOL,
-          status: "blocked",
-          summary: warning,
-          args: params,
-          data: {
-            approvalPreview: {
-              operationId,
-              provider: "contaazul",
-              toolName: CREATE_SERVICE_SALE_AND_ISSUE_BOLETO_TOOL,
-              action: "create",
-              target: { customerId: params.customerId, customerName: params.customerName },
-              changes: [],
-              irreversible: false,
-              rollbackNote: "Nenhuma acao executada."
-            },
-            plannedRequests: []
-          },
-          warnings: [warning]
-        });
-      }
+      const financialAccountId = resolveFinancialAccountId(
+        params.financialAccountId,
+        options.config.financialAccountId
+      );
       const idempotencyKey =
         params.idempotencyKey ?? createServiceSaleIdempotencyKey(params, financialAccountId);
+      const duplicate = await findBlockingServiceSaleDuplicate({
+        ledgerPath: options.ledgerPath,
+        operationId,
+        idempotencyKey
+      });
+      if (duplicate) {
+        return writeBlockedServiceSaleDuplicateReceipt({
+          ledgerPath: options.ledgerPath,
+          artifactsDir: options.artifactsDir,
+          operationId,
+          runtimeMode,
+          params,
+          idempotencyKey,
+          duplicate
+        });
+      }
+
+      let serviceTaxInformation: any;
+      const authToken = proSessions.get(params.relationId);
+      if (authToken) {
+        try {
+          const person = (await options.client.getPersonDetails({
+            authToken,
+            personUuid: params.customerId
+          })) as any;
+          if (person) {
+            const isLegal = person.personType === "Jurídica";
+            const isPublic = person.isPublicAgency === true || person.publicAgency === true;
+            const cityId = person.address?.[0]?.idCity || 2174;
+            const taxResult = (await options.client.calculateTaxes({
+              authToken,
+              payload: {
+                key: 1,
+                provider: { taxationRegime: "SIMPLE_NATIONAL", nationalPattern: false },
+                taker: {
+                  type: isLegal ? "LEGAL_PERSON" : "NATURAL_PERSON",
+                  taxationRegime: "NORMAL",
+                  publicAgency: isPublic
+                },
+                service: {
+                  id: params.serviceItemId,
+                  values: { base: params.unitValue },
+                  provisionPlace: { cityId },
+                  taxes: { iss: { roundingMode: "HALF_EVEN" } }
+                }
+              }
+            })) as any;
+
+            if (taxResult && taxResult.service) {
+              serviceTaxInformation = {
+                id: params.serviceItemId,
+                values: taxResult.service.values,
+                taxes: taxResult.service.taxes,
+                provisionPlace: taxResult.service.provisionPlace
+              };
+            }
+          }
+        } catch (err) {
+          // ignore tax error, fallback to default
+        }
+      }
+
+      const authTokenForLookup = proSessions.get(params.relationId);
+      const companyDisplayName = authTokenForLookup
+        ? await resolveCompanyDisplayNameFromSession(
+            options.client,
+            authTokenForLookup,
+            params.notification.companyDisplayName,
+            options.config.defaultCompanyDisplayName
+          )
+        : params.notification.companyDisplayName ?? options.config.defaultCompanyDisplayName;
+
       const salePayload = buildServiceSalePayload({
         params,
-        financialAccountId
+        financialAccountId,
+        serviceTaxInformation
       });
       const chargePayload = buildChargeRequestPayload({
         financialAccountId,
@@ -811,9 +1522,7 @@ export function createContaAzulMutationTools(
         saleNumber: params.saleNumber,
         email: params.notification.email,
         replyTo: params.notification.replyTo ?? options.config.defaultReplyToEmail,
-        companyDisplayName:
-          params.notification.companyDisplayName ??
-          options.config.defaultCompanyDisplayName,
+        companyDisplayName,
         chargeRequestIds: ["<charge_request_id_from_batch_create>"]
       });
       const plannedRequests: ContaAzulPlannedMappedRequest[] = [
@@ -863,42 +1572,6 @@ export function createContaAzulMutationTools(
         },
         idempotencyKey
       };
-
-      const duplicate = await findBlockingServiceSaleDuplicate({
-        ledgerPath: options.ledgerPath,
-        operationId,
-        idempotencyKey
-      });
-      if (duplicate) {
-        const duplicateSummary = asRecord(duplicate.responseSummary);
-        const duplicateOrphanedSaleId = stringValue(duplicateSummary?.orphanedSaleId);
-        const duplicateFailedStep = stringValue(duplicateSummary?.failedStep);
-        const warning = duplicateOrphanedSaleId
-          ? `Operacao similar ja criou uma venda no Conta Azul, mas falhou antes de concluir: ${duplicate.operationId} ` +
-            `(saleId=${duplicateOrphanedSaleId}${duplicateFailedStep ? `, etapa=${duplicateFailedStep}` : ""}). ` +
-            "Nenhuma nova venda ou boleto foi criado. Verifique e cancele a venda manualmente se necessario antes de tentar novamente."
-          : `Operacao similar ja concluida no Conta Azul: ${duplicate.operationId}. ` +
-            "Nenhuma nova venda ou boleto foi criado.";
-        return writeMutationReceipt({
-          ledgerPath: options.ledgerPath,
-          operationId,
-          runtimeMode,
-          toolName: CREATE_SERVICE_SALE_AND_ISSUE_BOLETO_TOOL,
-          status: "blocked",
-          summary: warning,
-          args: params,
-          data,
-          artifacts: duplicate.artifacts.length > 0 ? duplicate.artifacts : [pdfArtifact],
-          warnings: [warning],
-          responseSummary: {
-            summary: warning,
-            idempotencyKey,
-            duplicateOperationId: duplicate.operationId,
-            orphanedSaleId: duplicateOrphanedSaleId,
-            failedStep: duplicateFailedStep
-          }
-        });
-      }
 
       const missingSession = await blockIfProSessionMissing({
         ledgerPath: options.ledgerPath,
@@ -960,7 +1633,6 @@ export function createContaAzulMutationTools(
       });
       if (blocked) return blocked;
 
-      const authToken = proSessions.get(params.relationId);
       if (!authToken) {
         throw new Error("Conta Azul Pro session unexpectedly missing after validation.");
       }
@@ -1072,9 +1744,7 @@ export function createContaAzulMutationTools(
           saleNumber: createdSaleNumber,
           email: params.notification.email,
           replyTo: params.notification.replyTo ?? options.config.defaultReplyToEmail,
-          companyDisplayName:
-            params.notification.companyDisplayName ??
-            options.config.defaultCompanyDisplayName,
+          companyDisplayName,
           chargeRequestIds: [chargeRequestId]
         });
         const notificationResult = await options.client.sendChargeNotification({
@@ -1196,6 +1866,8 @@ async function writeErrorReceipt<T>(input: {
 }): Promise<ToolReceipt<T>> {
   const expiredError =
     input.error instanceof ContaAzulSessionExpiredError ? input.error : undefined;
+  const ambiguityError =
+    input.error instanceof AmbiguityError ? input.error : undefined;
   const isExpired = Boolean(expiredError);
   const message = input.error instanceof Error ? input.error.message : "Conta Azul tool failed.";
   const warning = expiredError
@@ -1212,7 +1884,13 @@ async function writeErrorReceipt<T>(input: {
     args: input.args,
     data: undefined as T,
     warnings: [warning],
-    responseSummary: { error: warning }
+    responseSummary: { error: warning },
+    ...(ambiguityError
+      ? {
+          candidates: ambiguityError.candidates,
+          fieldName: ambiguityError.fieldName
+        }
+      : {})
   });
 }
 
@@ -1242,6 +1920,36 @@ async function blockIfProSessionMissing(input: {
     data: input.data,
     artifacts: input.artifacts,
     warnings: [warning]
+  });
+}
+
+async function blockIfReadProSessionMissing<T>(
+  input: {
+    ledgerPath: string;
+    operationId: string;
+    runtimeMode: RuntimeMode;
+    toolName: string;
+    args: unknown;
+    authToken?: string;
+  },
+  blockedData: T
+): Promise<ToolReceipt<T> | undefined> {
+  if (input.authToken) return undefined;
+
+  const warning =
+    "Conta Azul Pro session is not available. Run switchToProSession for this relation first.";
+
+  return writeReceipt({
+    ledgerPath: input.ledgerPath,
+    operationId: input.operationId,
+    runtimeMode: input.runtimeMode,
+    toolName: input.toolName,
+    status: "blocked",
+    summary: warning,
+    args: input.args,
+    data: blockedData,
+    warnings: [warning],
+    responseSummary: { blocked: true, reason: warning }
   });
 }
 
@@ -1334,6 +2042,8 @@ async function writeReceipt<T>(input: {
   data: T;
   warnings?: string[];
   responseSummary?: unknown;
+  candidates?: string[];
+  fieldName?: string;
 }): Promise<ToolReceipt<T>> {
   const receipt: ToolReceipt<T> = {
     operationId: input.operationId,
@@ -1344,7 +2054,9 @@ async function writeReceipt<T>(input: {
     summary: input.summary,
     data: redact(input.data),
     artifacts: [],
-    warnings: input.warnings ?? []
+    warnings: input.warnings ?? [],
+    ...(input.candidates ? { candidates: input.candidates } : {}),
+    ...(input.fieldName ? { fieldName: input.fieldName } : {})
   };
 
   await appendLedgerEntry(input.ledgerPath, {
@@ -1359,6 +2071,90 @@ async function writeReceipt<T>(input: {
   });
 
   return receipt;
+}
+
+function resolveFinancialAccountId(
+  explicit: string | undefined,
+  configValue: string,
+  installmentAccountId?: string
+): string {
+  return (
+    explicit?.trim() ||
+    installmentAccountId?.trim() ||
+    configValue.trim() ||
+    CONTAAZUL_LEGACY_FINANCIAL_ACCOUNT_ID
+  );
+}
+
+async function resolveCompanyDisplayNameFromSession(
+  client: ContaAzulMutationClient,
+  authToken: string,
+  explicit: string | undefined,
+  fallback: string
+): Promise<string> {
+  if (explicit?.trim()) return explicit.trim();
+  try {
+    const details = asRecord(await client.getCompanyDetails({ authToken }));
+    const resolved =
+      stringField(details, "fantasyName") || stringField(details, "name");
+    if (resolved) return resolved;
+  } catch {
+    // Mirror contaazul/interativo.js: keep fallback when company details fail.
+  }
+  return fallback;
+}
+
+async function resolveSaleNotificationDefaults(input: {
+  client: ContaAzulMutationClient;
+  authToken: string;
+  customerId: string;
+  notification: {
+    email: string;
+    phone?: string;
+    replyTo?: string;
+    companyDisplayName?: string;
+  };
+  defaultReplyToEmail: string;
+}): Promise<{ email: string; phone?: string; replyTo: string }> {
+  let email = input.notification.email?.trim() ?? "";
+  let phone = input.notification.phone?.replace(/\D/g, "") ?? "";
+  const replyTo = input.notification.replyTo?.trim() || input.defaultReplyToEmail;
+
+  if (email && phone) {
+    return { email, phone, replyTo };
+  }
+
+  try {
+    const personRaw = await input.client.getPersonDetails({
+      authToken: input.authToken,
+      personUuid: input.customerId
+    });
+    const person = asRecord(personRaw);
+    if (!person) {
+      return { email, phone: phone || undefined, replyTo };
+    }
+    const billing = asRecord(person.billingContact);
+    const billingEmails = billing?.emails;
+    if (!email) {
+      email =
+        (Array.isArray(billingEmails) && typeof billingEmails[0] === "string"
+          ? billingEmails[0]
+          : "") ||
+        stringField(person, "email") ||
+        "";
+    }
+    if (!phone) {
+      phone =
+        stringField(billing, "phoneNumber")?.replace(/\D/g, "") ||
+        stringField(person, "cellPhone")?.replace(/\D/g, "") ||
+        stringField(person, "commercialPhone")?.replace(/\D/g, "") ||
+        "";
+    }
+  } catch {
+    // Mirror contaazul/interativo.js: proceed with whatever the operator provided.
+  }
+
+  return { email, phone: phone || undefined, replyTo };
 }
 
 async function resolveServiceSaleWorkflowParams(input: {
@@ -1376,7 +2172,7 @@ async function resolveServiceSaleWorkflowParams(input: {
     label: "Conta Azul Mais tenant",
     items: accountancyClients,
     expected: String(input.params.tenantId),
-    field: (item) => String(item.tenantId)
+    field: (item) => `${item.tenantId} | ${item.name}`
   });
 
   const session = await input.client.switchToProSession(accountancyClient.relationId);
@@ -1429,13 +2225,32 @@ async function resolveServiceSaleWorkflowParams(input: {
   const saleNumber =
     input.params.saleNumber ?? await input.client.getNextSaleNumber({ authToken: session.authToken });
   const saleDateIso = input.params.saleDateIso ?? todayIso();
+  const customerId = requiredStringField(customer, "id", "customer id");
+  const customerName = requiredStringField(customer, "name", "customer name");
+  const notificationDefaults = await resolveSaleNotificationDefaults({
+    client: input.client,
+    authToken: session.authToken,
+    customerId,
+    notification: input.params.notification,
+    defaultReplyToEmail: input.config.defaultReplyToEmail
+  });
+  const companyDisplayName = await resolveCompanyDisplayNameFromSession(
+    input.client,
+    session.authToken,
+    input.params.notification.companyDisplayName,
+    input.config.defaultCompanyDisplayName
+  );
+  const resolvedFinancialAccountId = resolveFinancialAccountId(
+    input.params.financialAccountId,
+    input.config.financialAccountId
+  );
 
   const resolvedParams: ContaAzulCreateServiceSaleAndIssueBoletoParams = {
     operationId: input.operationId,
     approvalText: input.params.approvalText,
     relationId: accountancyClient.relationId,
-    customerId: requiredStringField(customer, "id", "customer id"),
-    customerName: requiredStringField(customer, "name", "customer name"),
+    customerId,
+    customerName,
     categoryId: requiredStringField(category, "uuid", "category uuid"),
     serviceItemId: requiredStringField(serviceItem, "id", "service item id"),
     serviceDescription: input.params.serviceDescription,
@@ -1444,22 +2259,20 @@ async function resolveServiceSaleWorkflowParams(input: {
     saleDateIso,
     saleNumber,
     operationNatureId: requiredStringField(operationNature, "uuid", "operation nature uuid"),
-    financialAccountId: input.params.financialAccountId,
+    financialAccountId: resolvedFinancialAccountId,
     idempotencyKey: input.params.idempotencyKey,
     notification: {
-      email: input.params.notification.email,
-      phone: input.params.notification.phone,
-      replyTo: input.params.notification.replyTo ?? input.config.defaultReplyToEmail,
-      companyDisplayName:
-        input.params.notification.companyDisplayName ??
-        input.config.defaultCompanyDisplayName
+      email: notificationDefaults.email,
+      phone: notificationDefaults.phone,
+      replyTo: notificationDefaults.replyTo,
+      companyDisplayName
     }
   };
   resolvedParams.idempotencyKey =
     resolvedParams.idempotencyKey ??
     createServiceSaleWorkflowIdempotencyKey(
       resolvedParams,
-      resolvedParams.financialAccountId ?? input.config.financialAccountId
+      resolvedFinancialAccountId
     );
 
   return {
@@ -1522,6 +2335,79 @@ function createServiceSaleWorkflowIdempotencyKey(
   return `contaazul-sale-boleto-workflow:${createHash("sha256")
     .update(JSON.stringify(payload))
     .digest("hex")}`;
+}
+
+async function writeBlockedServiceSaleDuplicateReceipt(input: {
+  ledgerPath: string;
+  artifactsDir: string;
+  operationId: string;
+  runtimeMode: RuntimeMode;
+  params: z.output<typeof ContaAzulCreateServiceSaleAndIssueBoletoParamsSchema>;
+  idempotencyKey: string;
+  duplicate: LedgerEntry;
+}) {
+  const duplicateSummary = asRecord(input.duplicate.responseSummary);
+  const duplicateOrphanedSaleId = stringValue(duplicateSummary?.orphanedSaleId);
+  const duplicateFailedStep = stringValue(duplicateSummary?.failedStep);
+  const warning = duplicateOrphanedSaleId
+    ? `Operacao similar ja criou uma venda no Conta Azul, mas falhou antes de concluir: ${input.duplicate.operationId} ` +
+      `(saleId=${duplicateOrphanedSaleId}${duplicateFailedStep ? `, etapa=${duplicateFailedStep}` : ""}). ` +
+      "Nenhuma nova venda ou boleto foi criado. Verifique e cancele a venda manualmente se necessario antes de tentar novamente."
+    : `Operacao similar ja concluida no Conta Azul: ${input.duplicate.operationId}. ` +
+      "Nenhuma nova venda ou boleto foi criado.";
+  const pdfArtifact: Artifact = {
+    kind: "pdf",
+    path: path.join(
+      input.artifactsDir,
+      "contaazul",
+      input.operationId,
+      `boleto_venda_${input.params.saleNumber}.pdf`
+    ),
+    label: "boleto da venda planejado"
+  };
+  const data: ContaAzulMutationPlan = {
+    idempotencyKey: input.idempotencyKey,
+    approvalPreview: {
+      operationId: input.operationId,
+      provider: "contaazul",
+      toolName: CREATE_SERVICE_SALE_AND_ISSUE_BOLETO_TOOL,
+      action: "create",
+      target: {
+        customerId: input.params.customerId,
+        customerName: input.params.customerName
+      },
+      changes: [],
+      irreversible: false,
+      rollbackNote: ""
+    },
+    plannedRequests: [],
+    pollingPlan: {
+      url: `${SERVICES_BASE_URL}/finance-pro/v1/financial-events?reference_id=<created_sale_id>`,
+      maxAttempts: 10,
+      delayMs: 2000
+    }
+  };
+
+  return writeMutationReceipt({
+    ledgerPath: input.ledgerPath,
+    operationId: input.operationId,
+    runtimeMode: input.runtimeMode,
+    toolName: CREATE_SERVICE_SALE_AND_ISSUE_BOLETO_TOOL,
+    status: "blocked",
+    summary: warning,
+    args: input.params,
+    data,
+    artifacts:
+      input.duplicate.artifacts.length > 0 ? input.duplicate.artifacts : [pdfArtifact],
+    warnings: [warning],
+    responseSummary: {
+      summary: warning,
+      idempotencyKey: input.idempotencyKey,
+      duplicateOperationId: input.duplicate.operationId,
+      orphanedSaleId: duplicateOrphanedSaleId,
+      failedStep: duplicateFailedStep
+    }
+  });
 }
 
 async function findBlockingServiceSaleDuplicate(input: {
@@ -1657,9 +2543,16 @@ function pickByField<T>(input: {
   if (partial.length === 1) return partial[0] as T;
 
   const candidates = input.items.map((item) => input.field(item)).filter(Boolean);
-  throw new Error(
-    `Could not resolve unique ${input.label} for "${input.expected}". Candidates: ${candidates.join(" | ")}`
-  );
+  if (candidates.length > 0) {
+    throw new AmbiguityError(
+      `Multiplos itens encontrados para "${input.expected}". Escolha um:\n` +
+        candidates.map((c, i) => `[${i + 1}] ${c}`).join("\n"),
+      candidates,
+      input.label
+    );
+  }
+
+  throw new Error(`Nenhum(a) ${input.label} encontrado(a) para "${input.expected}".`);
 }
 
 function parseMoneyBr(value: string): number {
@@ -1815,6 +2708,7 @@ function buildCustomerPayload(
 function buildServiceSalePayload(input: {
   params: ContaAzulCreateServiceSaleAndIssueBoletoParams;
   financialAccountId: string;
+  serviceTaxInformation?: unknown;
 }): Record<string, unknown> {
   const { params } = input;
   return {
@@ -1851,7 +2745,8 @@ function buildServiceSalePayload(input: {
     automation: {
       serviceInvoiceEmission: { type: "PAYMENT_IDENTIFICATION", active: false }
     },
-    originFlowType: "SIMPLIFIED_SALE"
+    originFlowType: "SIMPLIFIED_SALE",
+    ...(input.serviceTaxInformation ? { serviceTaxInformation: input.serviceTaxInformation } : {})
   };
 }
 

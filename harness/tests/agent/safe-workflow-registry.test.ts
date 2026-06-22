@@ -25,12 +25,19 @@ describe("safe workflow registry", () => {
       parameters: z.object({}),
       execute: async () => ({})
     });
+    registry.register({
+      name: "contaazul.create_customer_workflow",
+      description: "Safe Conta Azul customer workflow.",
+      parameters: z.object({}),
+      execute: async () => ({})
+    });
 
     const safe = createSafeWorkflowRegistry(registry);
 
     expect(safe.list().map((tool) => tool.name)).toEqual([
       "asaas.create_boleto_charge_workflow",
-      "contaazul.create_service_sale_boleto_workflow"
+      "contaazul.create_service_sale_boleto_workflow",
+      "contaazul.create_customer_workflow"
     ]);
   });
 });

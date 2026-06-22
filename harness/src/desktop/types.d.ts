@@ -19,6 +19,10 @@ declare global {
       ): Promise<import("../server/api-types.js").ExecuteOperationApiResponse>;
       openExternal(url: string): Promise<void>;
       openPath(path: string): Promise<void>;
+      listAccountancyClients(): Promise<any[]>;
+      searchSaleCustomers(relationId: string, searchTerm: string): Promise<any[]>;
+      searchFinancialCategories(relationId: string, searchTerm: string): Promise<any[]>;
+      searchServiceItems(relationId: string, searchTerm: string): Promise<any[]>;
     };
   }
 }

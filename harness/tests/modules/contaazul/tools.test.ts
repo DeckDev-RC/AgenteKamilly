@@ -516,13 +516,16 @@ describe("Conta Azul mutation tools", () => {
     expect(receipt.data?.plannedRequests[2].payload).toMatchObject({
       emails: ["cliente@example.test"],
       replyTo: "reply@example.test",
-      subject: "[Importante] Chegou sua fatura de Empresa Teste"
+      subject: "[Importante] Chegou sua fatura de Empresa Pro"
     });
     expect(receipt.artifacts[0]).toMatchObject({
       kind: "pdf",
       path: path.join(artifactsDir, "contaazul", "op_sale", "boleto_venda_123.pdf")
     });
-    expect(client.calls).toEqual([]);
+    expect(client.calls.map((call: any) => call.name)).toEqual([
+      "getPersonDetails",
+      "getCompanyDetails"
+    ]);
   });
 
   it("resolves service sale workflow by names before planning the boleto flow", async () => {
@@ -579,7 +582,9 @@ describe("Conta Azul mutation tools", () => {
       "searchFinancialCategories",
       "searchServiceItems",
       "listOperationNatures",
-      "getNextSaleNumber"
+      "getNextSaleNumber",
+      "getCompanyDetails",
+      "getPersonDetails"
     ]);
   });
 
@@ -619,6 +624,8 @@ describe("Conta Azul mutation tools", () => {
 
     expect(receipt.status).toBe("succeeded");
     expect(client.calls.map((call: any) => call.name)).toEqual([
+      "getPersonDetails",
+      "getCompanyDetails",
       "createServiceSale",
       "getFinancialEventsByReference",
       "createChargeRequest",
@@ -662,15 +669,15 @@ describe("Conta Azul mutation tools", () => {
     });
   });
 
-  it("blocks a live service sale when the financial account id is not configured", async () => {
+  it("uses the legacy financial account id when config is empty", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "harness-contaazul-mutation-"));
     const client = createFakeMutationClient({});
     const tools = createContaAzulMutationTools({
       client,
       ledgerPath: path.join(dir, "ledger", "operations.jsonl"),
       artifactsDir: path.join(dir, "artifacts"),
-      runtimeMode: "live",
-      allowLiveMutations: true,
+      runtimeMode: "dry-run",
+      allowLiveMutations: false,
       config: { financialAccountId: "", defaultReplyToEmail: "reply@example.test", defaultCompanyDisplayName: "Empresa Teste" },
       proSessionStore: new Map([["rel_001", "pro-token-test"]]),
       operationIdFactory: () => "op_no_account"
@@ -688,13 +695,19 @@ describe("Conta Azul mutation tools", () => {
       saleDateIso: "2026-06-19",
       saleNumber: 123,
       operationNatureId: "nature_uuid",
-      notification: { email: "cliente@example.test", phone: "11999999999" },
-      approvalText: "APROVAR op_no_account"
+      notification: { email: "cliente@example.test", phone: "11999999999" }
     });
 
-    expect(receipt.status).toBe("blocked");
-    expect(receipt.warnings.join(" ")).toContain("CONTAAZUL_FINANCIAL_ACCOUNT_ID");
-    expect(client.calls).toEqual([]);
+    expect(receipt.status).toBe("planned");
+    expect(receipt.data?.plannedRequests[0].payload).toMatchObject({
+      paymentCondition: {
+        financialAccountId: "cf6eedce-10e8-4554-b707-9246826b12c6"
+      }
+    });
+    expect(client.calls.map((call: any) => call.name)).toEqual([
+      "getPersonDetails",
+      "getCompanyDetails"
+    ]);
   });
 
   it("blocks a repeated service sale when an idempotency match already succeeded", async () => {
@@ -783,7 +796,10 @@ describe("Conta Azul mutation tools", () => {
 
     expect(receipt.status).toBe("blocked");
     expect(receipt.warnings.join(" ")).toContain("node contaazul/capture.js");
-    expect(base.calls).toEqual([]);
+    expect(base.calls.map((call: any) => call.name)).toEqual([
+      "getPersonDetails",
+      "getCompanyDetails"
+    ]);
   });
 
   it("captures the orphaned sale id when a post-sale step fails", async () => {
@@ -827,6 +843,8 @@ describe("Conta Azul mutation tools", () => {
     expect(receipt.warnings.join(" ")).toContain("sale_uuid");
     expect(receipt.data?.result).toMatchObject({ orphanedSaleId: "sale_uuid", failedStep: "poll_financial_event" });
     expect(base.calls.map((call: any) => call.name)).toEqual([
+      "getPersonDetails",
+      "getCompanyDetails",
       "createServiceSale",
       "getFinancialEventsByReference"
     ]);
@@ -956,6 +974,8 @@ describe("Conta Azul mutation tools", () => {
     });
     expect(repeated.status).toBe("failed");
     expect(base.calls.slice(callCountAfterAck).map((call: any) => call.name)).toEqual([
+      "getPersonDetails",
+      "getCompanyDetails",
       "createServiceSale",
       "getFinancialEventsByReference"
     ]);
@@ -1163,7 +1183,10 @@ describe("Conta Azul mutation tools", () => {
     expect(receipt.status).toBe("failed");
     expect(receipt.warnings.join(" ")).toContain("health check failed");
     expect(receipt.warnings.join(" ")).not.toContain("capture");
-    expect(base.calls).toEqual([]);
+    expect(base.calls.map((call: any) => call.name)).toEqual([
+      "getPersonDetails",
+      "getCompanyDetails"
+    ]);
   });
 
   it("records a failed preflight when Pro session verification throws a technical error", async () => {
@@ -1205,7 +1228,10 @@ describe("Conta Azul mutation tools", () => {
     expect(receipt.status).toBe("failed");
     expect(receipt.warnings.join(" ")).toContain("HTTP 500");
     expect(receipt.warnings.join(" ")).not.toContain("capture");
-    expect(base.calls).toEqual([]);
+    expect(base.calls.map((call: any) => call.name)).toEqual([
+      "getPersonDetails",
+      "getCompanyDetails"
+    ]);
   });
 
   it("captures AmbiguityError and populates candidates and fieldName on the failed receipt", async () => {
@@ -1291,6 +1317,16 @@ function createFakeClient(options: {
     async searchServiceItems(params: unknown) {
       client.lookupCalls.push({ name: "searchServiceItems", payload: params });
       return [{ id: "item_1", name: "Honorário Contábil" }];
+    },
+    async getPersonDetails(params: unknown) {
+      client.lookupCalls.push({ name: "getPersonDetails", payload: params });
+      return {
+        email: "cliente@example.test",
+        billingContact: {
+          emails: ["cliente@example.test"],
+          phoneNumber: "11999999999"
+        }
+      };
     }
   };
 
@@ -1414,6 +1450,20 @@ function createFakeMutationClient(options: {
     async downloadBoletoPdf(params: unknown) {
       client.calls.push({ name: "downloadBoletoPdf", payload: params });
       return Buffer.from("%PDF-1.4 test");
+    },
+    async getCompanyDetails(params: unknown) {
+      client.calls.push({ name: "getCompanyDetails", payload: params });
+      return { fantasyName: "Empresa Pro", name: "Empresa Pro LTDA" };
+    },
+    async getPersonDetails(params: unknown) {
+      client.calls.push({ name: "getPersonDetails", payload: params });
+      return {
+        email: "cliente@example.test",
+        billingContact: {
+          emails: ["cliente@example.test"],
+          phoneNumber: "11999999999"
+        }
+      };
     }
   };
 

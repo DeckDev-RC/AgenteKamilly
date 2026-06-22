@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 import type { ToolRegistry } from "../core/tool-registry.js";
-import type { JsonSchema, ModelProvider } from "./model-provider.js";
+import type { JsonSchema, ModelProvider, ModelMessage } from "./model-provider.js";
 
 const RiskSchema = z.preprocess((value) => {
   if (typeof value !== "string") return value;
@@ -48,6 +48,32 @@ export const AGENT_PLAN_RESPONSE_SCHEMA: JsonSchema = {
         previousOperationId: { type: "string" },
         orphanedSaleId: { type: "string" },
         cleanupAction: { type: "string" },
+        // Customer creation workflow fields
+        personType: { type: "string" },
+        document: { type: "string" },
+        name: { type: "string" },
+        companyName: { type: "string" },
+        email: { type: "string" },
+        commercialPhone: { type: "string" },
+        cellPhone: { type: "string" },
+        zipcode: { type: "string" },
+        street: { type: "string" },
+        numberAddress: { type: "string" },
+        neighborhood: { type: "string" },
+        complement: { type: "string" },
+        billingEmail: { type: "string" },
+        billingPhone: { type: "string" },
+        createBoleto: { type: "boolean" },
+        // Reissue / update due date fields
+        relationId: { type: "string" },
+        financialEventId: { type: "string" },
+        installmentId: { type: "string" },
+        dueDateIso: { type: "string" },
+        value: { type: "number" },
+        originalDescription: { type: "string" },
+        installmentVersion: { type: "number" },
+        installmentIndex: { type: "number" },
+        financialAccountId: { type: "string" },
         notification: {
           type: "object",
           properties: {
@@ -82,6 +108,7 @@ export type AgentTurnInput = {
   registry: ToolRegistry;
   provider: ModelProvider;
   knownParams?: Record<string, unknown>;
+  history?: Array<{ role: "user" | "assistant"; text: string }>;
 };
 
 export type AgentTurnResult =
@@ -119,13 +146,29 @@ export async function planAgentTurn(input: AgentTurnInput): Promise<AgentTurnRes
     };
   }
 
+  const messages: ModelMessage[] = [
+    { role: "system", content: buildSystemPrompt(input.registry) }
+  ];
+
+  if (input.history && input.history.length > 0) {
+    const limitedHistory = input.history.slice(-10);
+    for (const turn of limitedHistory) {
+      messages.push({
+        role: turn.role,
+        content: turn.text
+      });
+    }
+  }
+
+  messages.push({
+    role: "user",
+    content: buildUserPrompt(input.request, input.knownParams)
+  });
+
   let modelResponse;
   try {
     modelResponse = await input.provider.generateText({
-      messages: [
-        { role: "system", content: buildSystemPrompt(input.registry) },
-        { role: "user", content: buildUserPrompt(input.request, input.knownParams) }
-      ],
+      messages,
       responseSchema: AGENT_PLAN_RESPONSE_SCHEMA
     });
   } catch (error) {
@@ -159,7 +202,7 @@ export async function planAgentTurn(input: AgentTurnInput): Promise<AgentTurnRes
     return {
       status: "blocked",
       toolName: plan.toolName,
-      reason: `Model-selected tool is not registered: ${plan.toolName}`
+      reason: capabilitiesMessage(input.registry)
     };
   }
 
@@ -181,10 +224,19 @@ export async function planAgentTurn(input: AgentTurnInput): Promise<AgentTurnRes
 
   const parsedParams = tool.parameters.safeParse(plan.params);
   if (!parsedParams.success) {
+    const fields = missingFieldsFromZodError(parsedParams.error);
     return {
-      status: "blocked",
+      status: "needs_input",
+      provider: modelResponse.provider,
+      model: modelResponse.model,
+      intent: plan.intent,
       toolName: plan.toolName,
-      reason: `Model-selected params failed tool validation: ${parsedParams.error.issues[0]?.message ?? "invalid params"}`
+      params: plan.params,
+      missingFields: fields,
+      questions: fields.map((field) => questionForField(field)),
+      risk: plan.risk,
+      confidence: plan.confidence,
+      reason: plan.reason
     };
   }
 
@@ -206,11 +258,34 @@ function buildSystemPrompt(registry: ToolRegistry): string {
   }));
 
   return [
-    "Voce e o planner dry-run do harness Kamilly.",
-    "Nunca execute operacoes. Escolha apenas uma ferramenta registrada e produza JSON puro.",
-    "APIs oficiais, OAuth, webhooks oficiais e MCPs oficiais de Asaas ou Conta Azul sao proibidos.",
-    "Se faltarem dados, preencha missingFields e faca apenas as perguntas necessarias.",
-    "Schema de saida: { intent, toolName, params, missingFields, questions, risk, confidence, reason }.",
+    "Você é a Kamilly, a assistente virtual inteligente e amigável do harness de contabilidade e finanças Confere.",
+    "Seu papel é planejar operações de dry-run para o usuário de forma conversacional, clara e prestativa.",
+    "Você NUNCA executa operações diretamente. Você apenas preenche a estrutura de saída JSON e delega para as ferramentas registradas.",
+    "Qualquer uso de APIs oficiais, OAuth, webhooks oficiais ou MCPs do Asaas/Conta Azul é proibido.",
+    "",
+    "INSTRUÇÕES DE COMUNICAÇÃO (ESSENCIAL PARA A UX):",
+    "1. Seu campo `reason` é a MENSAGEM PRINCIPAL que o usuário lerá no balão de chat. Escreva-a sempre em português natural, caloroso, profissional e de forma conversacional.",
+    "   - Se o usuário estiver confuso (ex: perguntar 'como assim?'), explique quem você é e como pode ajudá-lo de forma humana.",
+    "   - Se algum dado acabou de ser preenchido (ex: uma empresa foi selecionada), comemore ou reconheça isso de forma natural (ex: 'Perfeito, empresa X selecionada! Agora só preciso do tipo de pessoa e do CPF/CNPJ para cadastrar o cliente.') em vez de repetir a mesma mensagem mecânica.",
+    "   - Seja direto e diga claramente quais campos ainda faltam e por que eles são necessários.",
+    "2. Seu campo `questions` deve conter APENAS perguntas diretas e curtas de 1 linha correspondentes a cada item de `missingFields` (ex: 'O cliente é Pessoa Física ou Jurídica?' ou 'Qual o CPF/CNPJ?').",
+    "   - NUNCA coloque saudações, explicações gerais ou parágrafos longos dentro do array `questions`.",
+    "",
+    "IMPORTANTE SOBRE OS FLUXOS DE TRABALHO:",
+    "- Para cadastrar cliente (contaazul.create_customer_workflow), NÃO pergunte endereço, CEP, telefone, e-mail de cobrança ou nome. O sistema busca automaticamente via Receita Federal/CNPJ/CEP lookup. Pergunte apenas os 3 campos essenciais: tenantId (Empresa), personType (Tipo de pessoa) e document (CPF ou CNPJ).",
+    "- Para criar venda e boleto de serviço (contaazul.create_service_sale_boleto_workflow), você precisa de: tenantId, customerName, categoryName, itemName, serviceDescription, unitValueBr, dueDateBr e notification.email.",
+    "",
+    "Schema de saída obrigatório (JSON puro):",
+    "{",
+    "  \"intent\": \"a intenção detectada\",",
+    "  \"toolName\": \"o nome da ferramenta selecionada (ou string vazia se nenhuma couber)\",",
+    "  \"params\": { ... os parâmetros já coletados ... },",
+    "  \"missingFields\": [ ... os campos obrigatórios ainda não fornecidos ... ],",
+    "  \"questions\": [ ... perguntas curtas de 1 linha correspondentes a cada missingField ... ],",
+    "  \"risk\": \"low\" | \"medium\" | \"high\",",
+    "  \"confidence\": 0.0 a 1.0,",
+    "  \"reason\": \"sua resposta conversacional e amigável em português natural para o balão de chat\"",
+    "}",
     `Ferramentas registradas: ${JSON.stringify(tools)}`
   ].join("\n");
 }
@@ -299,11 +374,19 @@ function withKnownRequiredMissingFields(plan: AgentPlan): AgentPlan {
     if (!missingFields.includes(missingField)) missingFields.push(missingField);
   }
 
-  const addedFields = missingFields.filter((field) => !plan.missingFields.includes(field));
+  const uniqueMissing = uniqueStrings(missingFields);
+  const alignedQuestions = uniqueMissing.map((field, idx) => {
+    const originalField = plan.missingFields[idx];
+    if (originalField === field && plan.questions[idx]) {
+      return plan.questions[idx];
+    }
+    return questionForField(field);
+  });
+
   return {
     ...plan,
-    missingFields: uniqueStrings(missingFields),
-    questions: [...plan.questions, ...addedFields.map(questionForField)]
+    missingFields: uniqueMissing,
+    questions: alignedQuestions
   };
 }
 
@@ -332,23 +415,83 @@ function requiredFieldGroupsForTool(
     ];
   }
 
+  if (toolName === "contaazul.create_customer_workflow") {
+    return [
+      { preferredField: "tenantId", fields: ["tenantId"] },
+      { preferredField: "personType", fields: ["personType"] },
+      { preferredField: "document", fields: ["document"] }
+    ];
+  }
+
+  if (toolName === "contaazul.update_due_date_reissue_boleto_workflow") {
+    return [
+      { preferredField: "tenantId", fields: ["tenantId"] },
+      { preferredField: "financialEventId", fields: ["financialEventId"] },
+      { preferredField: "installmentId", fields: ["installmentId"] },
+      { preferredField: "dueDateIso", fields: ["dueDateIso", "dueDateBr"] }
+    ];
+  }
+
   return [];
 }
 
-function questionForField(field: string): string {
+export function questionForField(field: string): string {
   const questions: Record<string, string> = {
     customerName: "Qual o nome do cliente?",
     valueBr: "Qual o valor?",
     dueDateBr: "Qual a data de vencimento em DD/MM/AAAA?",
-    description: "Qual a descricao?",
+    description: "Qual a descrição?",
     tenantId: "Qual o tenantId da empresa no Conta Azul Mais?",
     categoryName: "Qual a categoria financeira?",
-    itemName: "Qual o item de servico?",
-    serviceDescription: "Qual a descricao do servico?",
-    unitValueBr: "Qual o valor unitario?",
-    "notification.email": "Qual o e-mail de cobranca do cliente?"
+    itemName: "Qual o item de serviço?",
+    serviceDescription: "Qual a descrição do serviço?",
+    unitValueBr: "Qual o valor unitário?",
+    "notification.email": "Qual o e-mail de cobrança do cliente?",
+    personType: "O cliente é Pessoa Física ou Jurídica?",
+    document: "Qual o CPF ou CNPJ do cliente?",
+    name: "Qual o nome completo do cliente?",
+    companyName: "Qual a razão social da empresa?",
+    email: "Qual o e-mail?",
+    commercialPhone: "Qual o telefone comercial?",
+    cellPhone: "Qual o celular?",
+    zipcode: "Qual o CEP?",
+    street: "Qual a rua/avenida?",
+    numberAddress: "Qual o número do endereço?",
+    neighborhood: "Qual o bairro?",
+    complement: "Qual o complemento?",
+    billingEmail: "Qual o e-mail de cobrança?",
+    billingPhone: "Qual o telefone de cobrança?",
+    createBoleto: "Deseja emitir boleto para este cliente?",
+    dueDateIso: "Qual a data de vencimento (AAAA-MM-DD)?",
+    financialEventId: "Qual o ID do evento financeiro?",
+    installmentId: "Qual o ID da parcela?",
+    operatorConfirmation: "Por favor, confirme a execução de segurança."
   };
-  return questions[field] ?? `Informe ${field}.`;
+  return questions[field] ?? `Por favor, informe o campo ${field}.`;
+}
+
+const CAPABILITY_LABELS: Record<string, string> = {
+  "asaas.create_boleto_charge_workflow": "criar boleto no Asaas",
+  "contaazul.create_service_sale_boleto_workflow": "criar venda de serviço e boleto no Conta Azul",
+  "contaazul.create_customer_workflow": "cadastrar cliente no Conta Azul"
+};
+
+function capabilitiesMessage(registry: ToolRegistry): string {
+  const labels = registry
+    .list()
+    .map((tool) => CAPABILITY_LABELS[tool.name])
+    .filter((label): label is string => Boolean(label));
+  const list = labels.length > 0 ? labels.join(", ") : "as operações configuradas";
+  return `Isso eu ainda não sei fazer. Hoje eu consigo: ${list}. O que você quer fazer?`;
+}
+
+function missingFieldsFromZodError(error: z.ZodError): string[] {
+  const fields = uniqueStrings(
+    error.issues
+      .map((issue) => issue.path.map(String).join("."))
+      .filter((path) => path.length > 0)
+  );
+  return fields.length > 0 ? fields : ["dados"];
 }
 
 function removeRedactedPlaceholders(value: unknown): Record<string, unknown> {
@@ -416,6 +559,12 @@ function normalizeFieldAlias(toolName: string, field: string): string {
     if (["duedate", "vencimento", "data vencimento"].includes(normalized)) return "dueDateIso";
     if (["description", "descricao", "servicedescription"].includes(normalized)) {
       return "serviceDescription";
+    }
+  }
+
+  if (toolName === "contaazul.update_due_date_reissue_boleto_workflow") {
+    if (["duedate", "vencimento", "data vencimento", "duedateiso", "duedatebr"].includes(normalized)) {
+      return "dueDateIso";
     }
   }
 

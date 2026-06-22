@@ -1,4 +1,4 @@
-# Confere UI Redesign — Living Assistant (Pixelyn) Design
+Confere UI Redesign — Living Assistant (Pixelyn) Design
 
 ## Status
 

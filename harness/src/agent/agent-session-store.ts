@@ -9,6 +9,7 @@ export type AgentSession = {
   updatedAt: string;
   slots: Record<string, unknown>;
   lastPlan?: unknown;
+  history?: Array<{ role: "user" | "assistant"; text: string }>;
 };
 
 export type AgentSessionStoreOptions = {

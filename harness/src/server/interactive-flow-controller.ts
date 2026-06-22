@@ -1494,7 +1494,7 @@ function collectDueDate(
   input: InteractiveFlowInput,
   state: InteractiveFlowState,
   sessionKey: string
-): InteractiveFlowResult {
+): InteractiveFlowResult | Promise<InteractiveFlowResult> {
   const dueDateBr = input.request.trim();
   if (!isValidDateBr(dueDateBr)) {
     return {
@@ -1509,14 +1509,64 @@ function collectDueDate(
   state.slots = { ...state.slots, dueDateBr };
   state.step = "notificationPhone";
   input.store.set(sessionKey, state);
-  return {
-    handled: true,
-    result: needsInput({
-      summary: "Vencimento registrado.",
-      missingFields: ["notification.phone"],
-      questions: ["Digite o telefone celular do cliente com DDD."]
-    })
-  };
+  return prefetchCustomerBillingDefaults(input, state).then(() => {
+    const phoneDefault = stringValue(state.slots.notificationPhoneDefault);
+    const emailDefault = stringValue(state.slots.notificationEmailDefault);
+    const phoneQuestion = phoneDefault
+      ? `Digite o telefone celular do cliente com DDD (deixe em branco para usar "${phoneDefault}").`
+      : "Digite o telefone celular do cliente com DDD.";
+    const summary = emailDefault
+      ? `Vencimento registrado. E-mail sugerido: ${emailDefault}.`
+      : "Vencimento registrado.";
+    return {
+      handled: true,
+      result: needsInput({
+        summary,
+        missingFields: ["notification.phone"],
+        questions: [phoneQuestion]
+      })
+    };
+  });
+}
+
+async function prefetchCustomerBillingDefaults(
+  input: InteractiveFlowInput,
+  state: InteractiveFlowState
+): Promise<void> {
+  if (state.slots.notificationPhoneDefault && state.slots.notificationEmailDefault) {
+    return;
+  }
+  const relationId = stringValue(state.slots.relationId);
+  const personUuid = stringValue(state.slots.customerId);
+  if (!relationId || !personUuid) return;
+
+  try {
+    const receipt = await executeTool<Record<string, unknown>>(
+      input.registry,
+      "contaazul.get_person_details",
+      { relationId, personUuid }
+    );
+    if (receipt.status !== "succeeded" || !receipt.data) return;
+    const person = receipt.data;
+    const billing = asRecord(person.billingContact);
+    const billingEmails = billing.emails;
+    const email =
+      (Array.isArray(billingEmails) && typeof billingEmails[0] === "string"
+        ? billingEmails[0]
+        : "") || stringValue(person.email) || "";
+    const phone =
+      stringValue(billing.phoneNumber)?.replace(/\D/g, "") ||
+      stringValue(person.cellPhone)?.replace(/\D/g, "") ||
+      stringValue(person.commercialPhone)?.replace(/\D/g, "") ||
+      "";
+    state.slots = {
+      ...state.slots,
+      notificationPhoneDefault: phone || state.slots.notificationPhoneDefault,
+      notificationEmailDefault: email || state.slots.notificationEmailDefault
+    };
+  } catch {
+    // Mirror contaazul/interativo.js: continue without suggested defaults.
+  }
 }
 
 function collectNotificationPhone(
@@ -1524,26 +1574,36 @@ function collectNotificationPhone(
   state: InteractiveFlowState,
   sessionKey: string
 ): InteractiveFlowResult {
-  const phone = input.request.replace(/\D/g, "");
+  const phoneDefault = stringValue(state.slots.notificationPhoneDefault);
+  const phone = (input.request.trim() || phoneDefault || "").replace(/\D/g, "");
   if (phone.length < 10) {
     return {
       handled: true,
       result: needsInput({
         summary: "Telefone inválido.",
         missingFields: ["notification.phone"],
-        questions: ["Digite o telefone celular do cliente com DDD."]
+        questions: [
+          phoneDefault
+            ? `Digite o telefone celular do cliente com DDD (deixe em branco para usar "${phoneDefault}").`
+            : "Digite o telefone celular do cliente com DDD."
+        ]
       })
     };
   }
   state.slots = { ...state.slots, notificationPhone: phone };
   state.step = "notificationEmail";
   input.store.set(sessionKey, state);
+  const emailDefault = stringValue(state.slots.notificationEmailDefault);
   return {
     handled: true,
     result: needsInput({
       summary: "Telefone registrado.",
       missingFields: ["notification.email"],
-      questions: ["Digite o e-mail de cobrança do cliente."]
+      questions: [
+        emailDefault
+          ? `Digite o e-mail de cobrança do cliente (deixe em branco para usar "${emailDefault}").`
+          : "Digite o e-mail de cobrança do cliente."
+      ]
     })
   };
 }
@@ -1553,14 +1613,19 @@ function collectNotificationEmail(
   state: InteractiveFlowState,
   sessionKey: string
 ): InteractiveFlowResult {
-  const email = input.request.trim();
+  const emailDefault = stringValue(state.slots.notificationEmailDefault);
+  const email = (input.request.trim() || emailDefault || "").trim();
   if (!isLikelyEmail(email)) {
     return {
       handled: true,
       result: needsInput({
         summary: "E-mail de cobrança inválido.",
         missingFields: ["notification.email"],
-        questions: ["Digite um e-mail de cobrança válido."]
+        questions: [
+          emailDefault
+            ? `Digite um e-mail de cobrança válido (deixe em branco para usar "${emailDefault}").`
+            : "Digite um e-mail de cobrança válido."
+        ]
       })
     };
   }
@@ -1572,7 +1637,9 @@ function collectNotificationEmail(
     result: needsInput({
       summary: "E-mail de cobrança registrado.",
       missingFields: ["notification.replyTo"],
-      questions: ["Digite o e-mail para o destinatário entrar em contato."]
+      questions: [
+        "Digite o e-mail para o destinatário entrar em contato (deixe em branco para usar o padrão do harness)."
+      ]
     })
   };
 }
@@ -1583,7 +1650,7 @@ async function collectNotificationReplyToAndPlan(
   sessionKey: string
 ): Promise<InteractiveFlowResult> {
   const replyTo = input.request.trim();
-  if (!isLikelyEmail(replyTo)) {
+  if (replyTo && !isLikelyEmail(replyTo)) {
     return {
       handled: true,
       result: needsInput({

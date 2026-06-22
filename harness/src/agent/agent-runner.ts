@@ -2,7 +2,7 @@ import type { ToolReceipt } from "../core/tool-types.js";
 import type { ToolRegistry } from "../core/tool-registry.js";
 import type { RuntimeMode } from "../core/tool-types.js";
 import { loadAgentSession, saveAgentSession, type AgentSession } from "./agent-session-store.js";
-import { planAgentTurn, type AgentPlan, type AgentTurnResult } from "./llm-planner.js";
+import { planAgentTurn, type AgentPlan, type AgentTurnResult, questionForField } from "./llm-planner.js";
 import type { ModelProvider } from "./model-provider.js";
 import { createSafeWorkflowRegistry } from "./safe-workflow-registry.js";
 
@@ -55,7 +55,8 @@ export async function runAgentTurn(input: AgentRunInput): Promise<AgentRunResult
     request: agentControl.request,
     registry: safeRegistry,
     provider: input.provider,
-    knownParams: workflowKnownParams
+    knownParams: workflowKnownParams,
+    history: session?.history
   });
 
   await persistSessionForResult(input, session, planned, workflowKnownParams);
@@ -90,6 +91,32 @@ export async function runAgentTurn(input: AgentRunInput): Promise<AgentRunResult
 
   const parsedParams = tool.parameters.parse(planned.plan.params);
   const receipt = (await tool.execute(parsedParams)) as ToolReceipt;
+
+  if (
+    receipt.status === "failed" &&
+    receipt.data &&
+    typeof receipt.data === "object" &&
+    "missingFields" in receipt.data &&
+    Array.isArray((receipt.data as any).missingFields)
+  ) {
+    const missing = (receipt.data as any).missingFields as string[];
+    const needsInputResult: AgentRunResult = {
+      status: "needs_input",
+      provider: planned.provider,
+      model: planned.model,
+      intent: planned.plan.intent,
+      toolName: planned.plan.toolName,
+      params: planned.plan.params,
+      missingFields: missing,
+      questions: missing.map((field) => questionForField(field)),
+      risk: planned.plan.risk,
+      confidence: planned.plan.confidence,
+      reason: `Não foi possível obter todos os dados automaticamente. Por favor, forneça os seguintes campos obrigatórios: ${missing.join(", ")}.`
+    };
+    await persistSessionForResult(input, session, needsInputResult, planned.plan.params);
+    return needsInputResult;
+  }
+
   await persistSessionForResult(input, session, { ...planned, receipt, status: "executed" }, planned.plan.params);
 
   return {
@@ -120,6 +147,54 @@ async function persistSessionForResult(
     ...paramsFromResult(result)
   };
   session.lastPlan = "plan" in result ? result.plan : result;
+
+  if (!session.history) {
+    session.history = [];
+  }
+
+  // Check if current user message is already in history to avoid duplication
+  const reversedHistory = [...session.history].reverse();
+  const lastUserMsgIndex = reversedHistory.findIndex((m) => m.role === "user");
+  const hasUserMsg =
+    lastUserMsgIndex !== -1 &&
+    reversedHistory[lastUserMsgIndex]?.text === input.request;
+
+  if (!hasUserMsg) {
+    session.history.push({ role: "user", text: input.request });
+  }
+
+  let agentResponseText = "";
+  if (result.status === "needs_input") {
+    agentResponseText = result.reason || "";
+  } else if (result.status === "planned") {
+    agentResponseText = result.plan.reason || "";
+  } else if (result.status === "executed") {
+    agentResponseText = "Operação executada com sucesso.";
+  } else if (result.status === "blocked") {
+    agentResponseText = result.reason || "Operação bloqueada.";
+  }
+
+  if (agentResponseText) {
+    const lastAssistantMsgIndex = reversedHistory.findIndex((m) => m.role === "assistant");
+    const lastAssistantMsg =
+      lastAssistantMsgIndex !== -1 ? reversedHistory[lastAssistantMsgIndex] : undefined;
+
+    if (
+      result.status === "executed" &&
+      lastAssistantMsg &&
+      "plan" in result &&
+      lastAssistantMsg.text === result.plan.reason
+    ) {
+      lastAssistantMsg.text = `${result.plan.reason}\n\n[Operação executada com sucesso]`;
+    } else {
+      session.history.push({ role: "assistant", text: agentResponseText });
+    }
+  }
+
+  if (session.history.length > 20) {
+    session.history = session.history.slice(-20);
+  }
+
   await saveAgentSession({ sessionsDir: input.sessionsDir, session });
 }
 

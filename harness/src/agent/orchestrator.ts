@@ -19,10 +19,16 @@ import type {
 import {
   ContaAzulAcknowledgeOrphanCleanupParamsSchema,
   ContaAzulCreateCustomerParamsSchema,
+  ContaAzulCreateCustomerWorkflowParamsSchema,
   ContaAzulCreateServiceSaleAndIssueBoletoParamsSchema,
+  ContaAzulGetPersonDetailsParamsSchema,
+  ContaAzulSearchFinancialCategoriesParamsSchema,
   ContaAzulSearchFinancialStatementParamsSchema,
+  ContaAzulSearchSaleCustomersParamsSchema,
+  ContaAzulSearchServiceItemsParamsSchema,
   ContaAzulSwitchToProSessionParamsSchema,
-  ContaAzulUpdateDueDateReissueBoletoParamsSchema
+  ContaAzulUpdateDueDateReissueBoletoParamsSchema,
+  ContaAzulUpdateDueDateReissueBoletoWorkflowParamsSchema
 } from "../modules/contaazul/tools.js";
 import { ContaAzulCreateServiceSaleBoletoWorkflowParamsSchema } from "../modules/contaazul/workflows.js";
 
@@ -141,6 +147,34 @@ export function registerHarnessTools(registry: ToolRegistry, toolset: HarnessToo
   );
   registerIfPresent(
     registry,
+    toolset.contaAzulRead?.searchSaleCustomers,
+    "contaazul.search_sale_customers",
+    "Search Conta Azul Pro sale customers through mapped session HTTP.",
+    ContaAzulSearchSaleCustomersParamsSchema
+  );
+  registerIfPresent(
+    registry,
+    toolset.contaAzulRead?.searchFinancialCategories,
+    "contaazul.search_financial_categories",
+    "Search Conta Azul Pro financial categories through mapped session HTTP.",
+    ContaAzulSearchFinancialCategoriesParamsSchema
+  );
+  registerIfPresent(
+    registry,
+    toolset.contaAzulRead?.searchServiceItems,
+    "contaazul.search_service_items",
+    "Search Conta Azul Pro service items through mapped session HTTP.",
+    ContaAzulSearchServiceItemsParamsSchema
+  );
+  registerIfPresent(
+    registry,
+    toolset.contaAzulRead?.getPersonDetails,
+    "contaazul.get_person_details",
+    "Load Conta Azul Pro person details for billing defaults.",
+    ContaAzulGetPersonDetailsParamsSchema
+  );
+  registerIfPresent(
+    registry,
     toolset.contaAzulMutation?.updateDueDateReissueBoleto,
     "contaazul.update_due_date_reissue_boleto",
     "Plan or execute Conta Azul due-date update and boleto reissue.",
@@ -148,10 +182,24 @@ export function registerHarnessTools(registry: ToolRegistry, toolset: HarnessToo
   );
   registerIfPresent(
     registry,
+    toolset.contaAzulMutation?.updateDueDateReissueBoletoWorkflow,
+    "contaazul.update_due_date_reissue_boleto_workflow",
+    "Resolve Conta Azul tenant, details of installment, then plan or execute due-date update and boleto reissue.",
+    ContaAzulUpdateDueDateReissueBoletoWorkflowParamsSchema
+  );
+  registerIfPresent(
+    registry,
     toolset.contaAzulMutation?.createCustomer,
     "contaazul.create_customer",
     "Plan or execute Conta Azul customer creation.",
     ContaAzulCreateCustomerParamsSchema
+  );
+  registerIfPresent(
+    registry,
+    toolset.contaAzulMutation?.createCustomerWorkflow,
+    "contaazul.create_customer_workflow",
+    "Resolve Conta Azul tenant, CNPJ/CPF details, then plan or execute customer creation.",
+    ContaAzulCreateCustomerWorkflowParamsSchema
   );
   registerIfPresent(
     registry,
@@ -377,6 +425,16 @@ const ROUTES: Route[] = [
     requiredFields: ["relationId", "person"],
     priority: 0,
     match: (request) => hasAll(request, ["conta azul", "cliente"]) && hasAny(request, ["cadastrar", "criar"])
+  },
+  {
+    provider: "contaazul",
+    intent: "create_customer_workflow",
+    toolName: "contaazul.create_customer_workflow",
+    requiredFields: ["tenantId", "personType", "document"],
+    priority: 10,
+    match: (request) =>
+      hasAll(request, ["conta azul", "cliente"]) &&
+      hasAny(request, ["cadastrar", "criar", "novo", "nova"])
   },
   {
     provider: "contaazul",

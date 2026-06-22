@@ -11,7 +11,7 @@ export type { ContaAzulCreateServiceSaleBoletoWorkflowParams };
 
 export type ContaAzulWorkflowTools = Pick<
   ContaAzulMutationTools,
-  "createServiceSaleBoletoWorkflow"
+  "createServiceSaleBoletoWorkflow" | "createCustomerWorkflow"
 >;
 
 export function createContaAzulWorkflowTools(
@@ -19,6 +19,7 @@ export function createContaAzulWorkflowTools(
 ): ContaAzulWorkflowTools {
   const tools = createContaAzulMutationTools(options);
   return {
-    createServiceSaleBoletoWorkflow: tools.createServiceSaleBoletoWorkflow
+    createServiceSaleBoletoWorkflow: tools.createServiceSaleBoletoWorkflow,
+    createCustomerWorkflow: tools.createCustomerWorkflow
   };
 }
