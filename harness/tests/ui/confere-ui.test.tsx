@@ -5,7 +5,7 @@ import { App } from "../../src/ui/App.js";
 import { ConfirmationSheet } from "../../src/ui/components/ConfirmationSheet.js";
 import { PixelynAvatar } from "../../src/ui/components/PixelynAvatar.js";
 import { PlanCard } from "../../src/ui/components/PlanCard.js";
-import { AssistantResultMessage } from "../../src/ui/screens/AssistantScreen.js";
+import { AssistantResultMessage, buildBoletoHandoffParams } from "../../src/ui/screens/AssistantScreen.js";
 import { OperationsScreen } from "../../src/ui/screens/OperationsScreen.js";
 
 describe("Confere UI", () => {
@@ -157,6 +157,49 @@ describe("Confere UI", () => {
     expect(html).toContain("AZUOS ASSESSORIA CONTÁBIL LTDA");
     expect(html).not.toContain("Selecione a empresa acima primeiro");
     expect(html).not.toContain("Pesquisar cliente por nome");
+  });
+
+  it("builds the boleto hand-off marker from the resolved customer", () => {
+    const params = buildBoletoHandoffParams({
+      customerId: "new_cust",
+      customerName: "MARIA SILVA",
+      tenantId: 3047702,
+      relationId: "rel_mais"
+    });
+    expect(params).toEqual({
+      __interactive: { flow: "contaazul_service_sale_boleto", action: "start_with_customer" },
+      tenantId: 3047702,
+      relationId: "rel_mais",
+      customerId: "new_cust",
+      customerName: "MARIA SILVA"
+    });
+  });
+
+  it("renders the boleto offer after a successful cadastro", () => {
+    const html = renderToString(
+      <AssistantResultMessage
+        message={{
+          id: "m",
+          role: "assistant",
+          timestamp: "21:11",
+          result: {
+            status: "executed",
+            toolName: "contaazul.create_customer_workflow",
+            receiptStatus: "succeeded",
+            missingFields: [],
+            questions: [],
+            warnings: [],
+            approvalAvailable: false,
+            receiptData: { resolved: { customerId: "new_cust", customerName: "MARIA SILVA", tenantId: 3047702, relationId: "rel_mais" } }
+          }
+        }}
+        isLatest
+        onReview={() => undefined}
+        onSend={() => undefined}
+      />
+    );
+    expect(html).toContain("Deseja emitir um novo boleto");
+    expect(html).toContain("Sim, emitir boleto");
   });
 
   it("renders the final confirmation sheet before live approval", () => {

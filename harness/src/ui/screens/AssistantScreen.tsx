@@ -86,6 +86,21 @@ const FIELD_LABELS: Record<string, string> = {
   operatorConfirmation: "Confirmação de segurança"
 };
 
+export function buildBoletoHandoffParams(resolved: {
+  customerId?: string;
+  customerName?: string;
+  tenantId?: string | number;
+  relationId?: string;
+}): Record<string, unknown> {
+  return {
+    __interactive: { flow: "contaazul_service_sale_boleto", action: "start_with_customer" },
+    tenantId: resolved.tenantId,
+    relationId: resolved.relationId,
+    customerId: resolved.customerId,
+    customerName: resolved.customerName
+  };
+}
+
 function createSessionId(): string {
   return `confere_${Date.now()}`;
 }
@@ -379,10 +394,7 @@ export function AssistantResultMessage(props: {
                     fontSize: "0.85em",
                     fontWeight: 500
                   }}
-                  onClick={() => props.onSend(`Emitir boleto de serviço`, {
-                    customerName: resolvedCustomer.customerName,
-                    customerId: resolvedCustomer.customerId
-                  })}
+                  onClick={() => props.onSend("Emitir boleto de serviço", buildBoletoHandoffParams(resolvedCustomer))}
                   type="button"
                 >
                   Sim, emitir boleto
