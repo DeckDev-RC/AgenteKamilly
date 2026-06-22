@@ -414,6 +414,38 @@ describe("confere service", () => {
     ]);
   });
 
+  it("allows live execution of the Conta Azul due-date reissue workflow", async () => {
+    const registry = createToolRegistry();
+    registry.register({
+      name: "contaazul.update_due_date_reissue_boleto_workflow",
+      description: "reissue",
+      parameters: z.object({}).passthrough(),
+      execute: async () =>
+        ({
+          ...plannedReceipt("contaazul.update_due_date_reissue_boleto_workflow", "op_reissue"),
+          status: "succeeded",
+          dryRun: false
+        }) satisfies ToolReceipt
+    });
+
+    const service = await createConfereService({
+      cwd: await mkdtemp(path.join(os.tmpdir(), "confere-service-")),
+      env: { RUNTIME_MODE: "dry-run", ALLOW_LIVE_MUTATIONS: "true" },
+      registryFactory: async () => ({ registry, warnings: [] }),
+      modelProvider: createFakeModelProvider({})
+    });
+    service.saveDraftForTest({
+      operationId: "op_reissue",
+      toolName: "contaazul.update_due_date_reissue_boleto_workflow",
+      request: "alterar vencimento",
+      params: { tenantId: 3047702, financialEventId: "fe_1", installmentId: "inst_1", dueDateIso: "2026-07-20" },
+      createdAt: "2026-06-20T12:00:00.000Z"
+    });
+
+    const response = await service.executeApprovedOperation({ operationId: "op_reissue" });
+    expect(response.status).toBe("executed");
+  });
+
   it("blocks live execution when no draft exists", async () => {
     const service = await createConfereService({
       cwd: await mkdtemp(path.join(os.tmpdir(), "confere-service-")),
