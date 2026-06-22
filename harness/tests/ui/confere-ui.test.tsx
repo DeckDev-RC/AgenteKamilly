@@ -39,6 +39,14 @@ describe("Confere UI", () => {
     expect(html).toContain("Atalhos");
   });
 
+  it("shows the four explicit anchored operations on the empty conversation", () => {
+    const html = renderToString(<App />);
+    expect(html).toContain("Mudar boleto · Asaas");
+    expect(html).toContain("Emitir boleto · Conta Azul");
+    expect(html).toContain("Criar cliente · Conta Azul");
+    expect(html).toContain("Mudar vencimento · Conta Azul");
+  });
+
   it("renders the Pixelyn avatar with a state label for accessibility", () => {
     expect(renderToString(<PixelynAvatar state="feito" />)).toContain("feito");
     expect(renderToString(<PixelynAvatar state="bloqueada" />)).toContain("bloqueada");

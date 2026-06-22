@@ -42,11 +42,11 @@ type ChatMessage =
       timestamp: string;
     };
 
-const QUICK_PROMPTS = [
-  "Cadastrar cliente no Conta Azul",
-  "Pesquisar extrato Conta Azul",
-  "Emitir Novo Boleto de Serviço",
-  "Criar cobrança no Asaas"
+const ANCHORED_OPERATIONS: { label: string; action: string }[] = [
+  { label: "Mudar boleto · Asaas", action: "start_asaas_update_due_date" },
+  { label: "Emitir boleto · Conta Azul", action: "start_contaazul_service_sale" },
+  { label: "Criar cliente · Conta Azul", action: "start_contaazul_create_customer" },
+  { label: "Mudar vencimento · Conta Azul", action: "start_contaazul_update_due_date" }
 ];
 
 const DEFAULT_PENDING_FIELDS = ["Cliente", "Valor", "Vencimento", "Plataforma"];
@@ -791,9 +791,15 @@ export function AssistantScreen(props: {
                 <h1>E aí, o que vamos resolver hoje?</h1>
                 <p>Descreva a cobrança, a venda ou o boleto que eu preparo o rascunho.</p>
                 <div className="assistant__starter-grid">
-                  {QUICK_PROMPTS.map((prompt) => (
-                    <button key={prompt} onClick={() => void prepare(prompt)} type="button">
-                      {prompt}
+                  {ANCHORED_OPERATIONS.map((op) => (
+                    <button
+                      key={op.action}
+                      onClick={() =>
+                        void prepare(op.label, { __interactive: { flow: "anchor", action: op.action } })
+                      }
+                      type="button"
+                    >
+                      {op.label}
                     </button>
                   ))}
                 </div>
@@ -837,7 +843,7 @@ export function AssistantScreen(props: {
               </button>
               <button
                 className="composer-chip"
-                onClick={() => setRequest(QUICK_PROMPTS[0]!)}
+                onClick={() => setRequest(ANCHORED_OPERATIONS[0]!.label)}
                 type="button"
               >
                 /
