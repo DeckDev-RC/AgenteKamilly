@@ -677,6 +677,25 @@ describe("interactive flow controller", () => {
     });
     expect(result.result.choices ?? []).toEqual([]);
   });
+
+  it("starts the Conta Azul service-sale flow from the anchor marker", async () => {
+    const registry = createToolRegistry();
+    registerTenantTools(registry);
+    const result = await runInteractiveFlowTurn({
+      request: "começar agora",
+      registry,
+      sessionId: "sess_anchor",
+      store: createInteractiveFlowStore(),
+      params: { __interactive: { flow: "anchor", action: "start_contaazul_service_sale" } }
+    });
+    expect(result.handled).toBe(true);
+    if (!result.handled) throw new Error("expected handled result");
+    expect(result.result).toMatchObject({ missingFields: ["tenantId"] });
+  });
+
+  it.todo("starts the Asaas update-due-date flow from the anchor marker");
+  it.todo("starts the create-customer flow from the anchor marker");
+  it.todo("starts the Conta Azul update-due-date flow from the anchor marker");
 });
 
 function registerTenantTools(registry: ReturnType<typeof createToolRegistry>): void {

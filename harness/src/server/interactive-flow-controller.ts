@@ -7,8 +7,20 @@ const ASAAS_FLOW = "asaas_boleto_charge";
 const PROVIDER_CHOICE_FLOW = "provider_choice";
 const INTERACTIVE_TOOL_NAME = "contaazul.interactive_service_sale_boleto";
 const PROVIDER_CHOICE_TOOL_NAME = "confere.interactive_boleto_provider";
+const ANCHOR_FLOW = "anchor";
+const ASAAS_UPDATE_FLOW = "asaas_update_charge_due_date";
+const CONTAZUL_UPDATE_FLOW = "contaazul_update_due_date";
+const CONTAZUL_CREATE_CUSTOMER_FLOW = "contaazul_create_customer";
+const ASAAS_UPDATE_TOOL_NAME = "asaas.interactive_update_charge_due_date";
+const CONTAZUL_UPDATE_TOOL_NAME = "contaazul.interactive_update_due_date";
+const CONTAZUL_CREATE_CUSTOMER_TOOL_NAME = "contaazul.interactive_create_customer";
 
-type InteractiveFlowName = typeof CONTAZUL_FLOW | typeof ASAAS_FLOW;
+type InteractiveFlowName =
+  | typeof CONTAZUL_FLOW
+  | typeof ASAAS_FLOW
+  | typeof ASAAS_UPDATE_FLOW
+  | typeof CONTAZUL_UPDATE_FLOW
+  | typeof CONTAZUL_CREATE_CUSTOMER_FLOW;
 
 type InteractiveMarker = {
   flow?: unknown;
@@ -101,6 +113,16 @@ export async function runInteractiveFlowTurn(input: InteractiveFlowInput): Promi
         })
       };
     }
+  }
+
+  if (marker.flow === ANCHOR_FLOW) {
+    if (marker.action === "start_contaazul_service_sale") {
+      input.store.set(sessionKey, { flow: CONTAZUL_FLOW, step: "tenant", slots: {} });
+      return promptContaAzulTenant(input.registry);
+    }
+    // start_asaas_update_due_date     → Task 5
+    // start_contaazul_create_customer → Task 9
+    // start_contaazul_update_due_date → Task 7
   }
 
   if (marker.flow === ASAAS_FLOW) {
@@ -594,7 +616,10 @@ async function continueContaAzulFlow(
   };
 }
 
-async function promptContaAzulTenant(registry: ToolRegistry): Promise<InteractiveFlowResult> {
+async function promptContaAzulTenant(
+  registry: ToolRegistry,
+  flow: InteractiveFlowName = CONTAZUL_FLOW
+): Promise<InteractiveFlowResult> {
   const tool = registry.list().find((definition) => definition.name === "contaazul.list_accountancy_clients");
   if (!tool) {
     return {
@@ -618,18 +643,18 @@ async function promptContaAzulTenant(registry: ToolRegistry): Promise<Interactiv
       summary: "Selecione a empresa do Conta Azul antes de pesquisar o cliente.",
       missingFields: ["tenantId"],
       questions: ["Selecione a empresa para esta operação."],
-      choices: clients.map(tenantChoice)
+      choices: clients.map((client) => tenantChoice(client, flow))
     })
   };
 }
 
-function tenantChoice(client: AccountancyClient): AgentChoiceView {
+function tenantChoice(client: AccountancyClient, flow: InteractiveFlowName): AgentChoiceView {
   return {
     id: `tenant:${client.tenantId}`,
     label: client.name,
     description: `Tenant ${client.tenantId}`,
     params: {
-      __interactive: { flow: CONTAZUL_FLOW, action: "select_tenant" },
+      __interactive: { flow, action: "select_tenant" },
       tenantId: client.tenantId,
       relationId: client.relationId,
       tenantName: client.name
