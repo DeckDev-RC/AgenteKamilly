@@ -759,7 +759,58 @@ describe("interactive flow controller", () => {
     expect(calls).toEqual([{ chargeId: "ch_1", dueDateBr: "20/07/2026" }]);
   });
   it.todo("starts the create-customer flow from the anchor marker");
-  it.todo("starts the Conta Azul update-due-date flow from the anchor marker");
+  it("runs the Conta Azul update-due-date flow through dry-run", async () => {
+    const store = createInteractiveFlowStore();
+    const registry = createToolRegistry();
+    const calls: unknown[] = [];
+    registerTenantTools(registry);
+    registry.register({
+      name: "contaazul.search_financial_statement",
+      description: "Search statement",
+      parameters: z.object({ relationId: z.string(), query: z.string().optional() }),
+      execute: async () =>
+        receipt("contaazul.search_financial_statement", [
+          { id: "inst_1", financialEventId: "fe_1", installmentId: "inst_1", description: "Mensalidade junho", value: 150, dueDateIso: "2026-06-10", customerName: "JOÃO LTDA", status: "PENDING" }
+        ])
+    });
+    registry.register({
+      name: "contaazul.update_due_date_reissue_boleto_workflow",
+      description: "Update due date workflow",
+      parameters: z.object({}).passthrough(),
+      execute: async (params) => {
+        calls.push(params);
+        return { ...receipt("contaazul.update_due_date_reissue_boleto_workflow", { approvalPreview: { operationId: "op_ca_update" } }), status: "planned" } satisfies ToolReceipt;
+      }
+    });
+
+    await runInteractiveFlowTurn({
+      request: "começar", registry, sessionId: "sess_cu", store,
+      params: { __interactive: { flow: "anchor", action: "start_contaazul_update_due_date" } }
+    });
+    await runInteractiveFlowTurn({
+      request: "MAIS NEGOCIOS", registry, sessionId: "sess_cu", store,
+      params: { __interactive: { flow: "contaazul_update_due_date", action: "select_tenant" }, tenantId: 3047702, relationId: "rel_mais", tenantName: "MAIS NEGOCIOS" }
+    });
+    const choices = await runInteractiveFlowTurn({ request: "JOÃO", registry, sessionId: "sess_cu", store });
+    expect(choices.handled).toBe(true);
+    if (!choices.handled) throw new Error("expected handled result");
+    expect(choices.result.choices?.[0]).toMatchObject({
+      id: "statement:inst_1",
+      params: { __interactive: { flow: "contaazul_update_due_date", action: "select_statement" }, financialEventId: "fe_1", installmentId: "inst_1" }
+    });
+    const askDate = await runInteractiveFlowTurn({
+      request: "Mensalidade junho", registry, sessionId: "sess_cu", store,
+      params: { __interactive: { flow: "contaazul_update_due_date", action: "select_statement" }, financialEventId: "fe_1", installmentId: "inst_1" }
+    });
+    expect(askDate.handled).toBe(true);
+    if (!askDate.handled) throw new Error("expected handled result");
+    expect(askDate.result).toMatchObject({ missingFields: ["dueDateBr"] });
+    const planned = await runInteractiveFlowTurn({ request: "20/07/2026", registry, sessionId: "sess_cu", store });
+    expect(planned.handled).toBe(true);
+    if (!planned.handled) throw new Error("expected handled result");
+    expect(planned.draftOperationId).toBe("op_ca_update");
+    expect(calls).toEqual([{ tenantId: 3047702, financialEventId: "fe_1", installmentId: "inst_1", dueDateIso: "2026-07-20" }]);
+  });
 });
 
 function registerTenantTools(registry: ReturnType<typeof createToolRegistry>): void {

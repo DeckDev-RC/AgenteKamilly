@@ -1,6 +1,6 @@
 import type { AgentChoiceView, AgentResultView } from "./api-types.js";
 import type { ToolRegistry } from "../core/tool-registry.js";
-import type { AccountancyClient, CustomerMatch, PendingCharge, ToolReceipt } from "../core/tool-types.js";
+import type { AccountancyClient, CustomerMatch, FinancialStatementItem, PendingCharge, ToolReceipt } from "../core/tool-types.js";
 
 const CONTAZUL_FLOW = "contaazul_service_sale_boleto";
 const ASAAS_FLOW = "asaas_boleto_charge";
@@ -50,7 +50,10 @@ type InteractiveFlowState = {
     | "asaasDescription"
     | "asaasUpdateCustomerSearch"
     | "asaasUpdateChargeChoice"
-    | "asaasUpdateDueDate";
+    | "asaasUpdateDueDate"
+    | "caUpdateStatementSearch"
+    | "caUpdateStatementChoice"
+    | "caUpdateDueDate";
   slots: Record<string, unknown>;
 };
 
@@ -128,7 +131,10 @@ export async function runInteractiveFlowTurn(input: InteractiveFlowInput): Promi
       return promptAsaasUpdateCustomerSearch();
     }
     // start_contaazul_create_customer → Task 9
-    // start_contaazul_update_due_date → Task 7
+    if (marker.action === "start_contaazul_update_due_date") {
+      input.store.set(sessionKey, { flow: CONTAZUL_UPDATE_FLOW, step: "tenant", slots: {} });
+      return promptContaAzulTenant(input.registry, CONTAZUL_UPDATE_FLOW);
+    }
   }
 
   if (marker.flow === ASAAS_FLOW) {
@@ -147,6 +153,15 @@ export async function runInteractiveFlowTurn(input: InteractiveFlowInput): Promi
       slots: {}
     };
     return continueAsaasUpdateFlow(input, sessionKey, state, marker);
+  }
+
+  if (marker.flow === CONTAZUL_UPDATE_FLOW) {
+    const state = existing ?? {
+      flow: CONTAZUL_UPDATE_FLOW,
+      step: "tenant" as const,
+      slots: {}
+    };
+    return continueContaAzulUpdateFlow(input, sessionKey, state, marker);
   }
 
   if (marker.flow === CONTAZUL_FLOW) {
@@ -168,6 +183,10 @@ export async function runInteractiveFlowTurn(input: InteractiveFlowInput): Promi
 
   if (existing?.flow === ASAAS_UPDATE_FLOW) {
     return continueAsaasUpdateFlow(input, sessionKey, existing, marker);
+  }
+
+  if (existing?.flow === CONTAZUL_UPDATE_FLOW) {
+    return continueContaAzulUpdateFlow(input, sessionKey, existing, marker);
   }
 
   if (!looksLikeContaAzulServiceBoletoRequest(input.request)) {
@@ -648,6 +667,175 @@ async function collectAsaasUpdateDueDateAndPlan(
       receiptData: receipt.data
     }
   };
+}
+
+async function continueContaAzulUpdateFlow(
+  input: InteractiveFlowInput,
+  sessionKey: string,
+  state: InteractiveFlowState,
+  marker: InteractiveMarker
+): Promise<InteractiveFlowResult> {
+  if (marker.action === "select_tenant") {
+    const relationId = stringValue(input.params?.relationId);
+    if (!relationId) {
+      return { handled: true, result: blocked("A empresa selecionada não possui relationId.") };
+    }
+    const sw = await executeTool<unknown>(input.registry, "contaazul.switch_to_pro_session", { relationId });
+    if (sw.status !== "succeeded") {
+      return { handled: true, result: blocked(sw.summary) };
+    }
+    state.slots = {
+      ...state.slots,
+      tenantId: input.params?.tenantId,
+      relationId,
+      tenantName: stringValue(input.params?.tenantName)
+    };
+    state.step = "caUpdateStatementSearch";
+    input.store.set(sessionKey, state);
+    return {
+      handled: true,
+      result: needsInput({
+        toolName: CONTAZUL_UPDATE_TOOL_NAME,
+        summary: "Empresa selecionada.",
+        missingFields: ["statementSearch"],
+        questions: ["Digite o nome do cliente ou descrição do lançamento."]
+      })
+    };
+  }
+  if (marker.action === "select_statement") {
+    state.slots = {
+      ...state.slots,
+      financialEventId: stringValue(input.params?.financialEventId),
+      installmentId: stringValue(input.params?.installmentId)
+    };
+    state.step = "caUpdateDueDate";
+    input.store.set(sessionKey, state);
+    return {
+      handled: true,
+      result: needsInput({
+        toolName: CONTAZUL_UPDATE_TOOL_NAME,
+        summary: "Lançamento selecionado.",
+        missingFields: ["dueDateBr"],
+        questions: ["Digite o novo vencimento (DD/MM/AAAA)."]
+      })
+    };
+  }
+  if (state.step === "tenant") return promptContaAzulTenant(input.registry, CONTAZUL_UPDATE_FLOW);
+  if (state.step === "caUpdateStatementSearch") return searchContaAzulStatement(input, state, sessionKey);
+  if (state.step === "caUpdateDueDate") return collectContaAzulUpdateDueDateAndPlan(input, state, sessionKey);
+  return promptContaAzulTenant(input.registry, CONTAZUL_UPDATE_FLOW);
+}
+
+async function searchContaAzulStatement(
+  input: InteractiveFlowInput,
+  state: InteractiveFlowState,
+  sessionKey: string
+): Promise<InteractiveFlowResult> {
+  const query = input.request.trim();
+  const relationId = stringValue(state.slots.relationId);
+  if (!relationId) {
+    return { handled: true, result: blocked("Sessão da empresa não está ativa.") };
+  }
+  if (!query) {
+    return {
+      handled: true,
+      result: needsInput({
+        toolName: CONTAZUL_UPDATE_TOOL_NAME,
+        summary: "Aguardando busca.",
+        missingFields: ["statementSearch"],
+        questions: ["Digite o nome do cliente ou descrição."]
+      })
+    };
+  }
+  const receipt = await executeTool<FinancialStatementItem[]>(input.registry, "contaazul.search_financial_statement", { relationId, query });
+  const items = Array.isArray(receipt.data) ? receipt.data : [];
+  if (items.length === 0) {
+    state.step = "caUpdateStatementSearch";
+    input.store.set(sessionKey, state);
+    return {
+      handled: true,
+      result: needsInput({
+        toolName: CONTAZUL_UPDATE_TOOL_NAME,
+        summary: `Não encontrei lançamento com "${query}".`,
+        missingFields: ["statementSearch"],
+        questions: [`Não encontrei lançamento com "${query}". Tente outro termo.`]
+      })
+    };
+  }
+  state.step = "caUpdateStatementChoice";
+  input.store.set(sessionKey, state);
+  return {
+    handled: true,
+    result: needsInput({
+      toolName: CONTAZUL_UPDATE_TOOL_NAME,
+      summary: `Encontrei ${items.length} lançamento(s).`,
+      missingFields: ["statementId"],
+      questions: ["Selecione o lançamento."],
+      choices: items.map((it) => ({
+        id: `statement:${it.installmentId ?? it.id}`,
+        label: `${it.customerName ? it.customerName + " · " : ""}${it.description}`,
+        description: `R$ ${it.value.toFixed(2).replace(".", ",")}${it.dueDateIso ? " · vence " + formatIsoToBr(it.dueDateIso) : ""}`,
+        params: {
+          __interactive: { flow: CONTAZUL_UPDATE_FLOW, action: "select_statement" },
+          financialEventId: it.financialEventId,
+          installmentId: it.installmentId ?? it.id
+        }
+      }))
+    })
+  };
+}
+
+async function collectContaAzulUpdateDueDateAndPlan(
+  input: InteractiveFlowInput,
+  state: InteractiveFlowState,
+  sessionKey: string
+): Promise<InteractiveFlowResult> {
+  const dueDateBr = input.request.trim();
+  if (!isValidDateBr(dueDateBr)) {
+    return {
+      handled: true,
+      result: needsInput({
+        toolName: CONTAZUL_UPDATE_TOOL_NAME,
+        summary: "Data inválida.",
+        missingFields: ["dueDateBr"],
+        questions: ["Digite o novo vencimento no formato DD/MM/AAAA."]
+      })
+    };
+  }
+  input.store.delete(sessionKey);
+  const [d, m, y] = dueDateBr.split("/");
+  const params = {
+    tenantId: state.slots.tenantId,
+    financialEventId: state.slots.financialEventId,
+    installmentId: state.slots.installmentId,
+    dueDateIso: `${y}-${m}-${d}`
+  };
+  const receipt = await executeTool<unknown>(input.registry, "contaazul.update_due_date_reissue_boleto_workflow", params);
+  const operationId = operationIdFromReceipt(receipt);
+  return {
+    handled: true,
+    draftOperationId: receipt.status === "planned" ? operationId : undefined,
+    draft: receipt.status === "planned" ? { operationId, toolName: receipt.toolName, params } : undefined,
+    result: {
+      status: "executed",
+      provider: "contaazul",
+      intent: "update_due_date_reissue_boleto",
+      toolName: receipt.toolName,
+      operationId,
+      receiptStatus: receipt.status,
+      summary: receipt.status === "planned" ? "Dry-run preparado para revisão." : receipt.summary,
+      missingFields: [],
+      questions: [],
+      warnings: receipt.warnings,
+      approvalAvailable: receipt.status === "planned",
+      receiptData: receipt.data
+    }
+  };
+}
+
+function formatIsoToBr(iso: string): string {
+  const parts = iso.split("-");
+  return parts.length === 3 ? `${parts[2]}/${parts[1]}/${parts[0]}` : iso;
 }
 
 function promptBoletoProvider(): InteractiveFlowResult {
