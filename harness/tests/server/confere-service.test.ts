@@ -91,6 +91,138 @@ describe("confere service", () => {
     });
   });
 
+  it("handles the Conta Azul service boleto wizard before calling the model planner", async () => {
+    const registry = createToolRegistry();
+    registry.register({
+      name: "contaazul.list_accountancy_clients",
+      description: "tenants",
+      parameters: z.object({}),
+      execute: async () => ({
+        operationId: "op_tenants",
+        provider: "contaazul",
+        toolName: "contaazul.list_accountancy_clients",
+        status: "succeeded",
+        dryRun: true,
+        summary: "tenants",
+        data: [
+          { tenantId: 3047702, relationId: "rel_mais", name: "MAIS NEGOCIOS", active: true }
+        ],
+        artifacts: [],
+        warnings: []
+      } satisfies ToolReceipt)
+    });
+    const provider = createFakeModelProvider({});
+    const service = await createConfereService({
+      cwd: await mkdtemp(path.join(os.tmpdir(), "confere-service-")),
+      env: { RUNTIME_MODE: "dry-run" },
+      registryFactory: async () => ({ registry, warnings: [] }),
+      modelProvider: provider
+    });
+
+    const response = await service.runAgentTurn({
+      request: "Emitir Novo Boleto de Serviço",
+      sessionId: "sess_interactive"
+    });
+
+    expect(provider.calls).toEqual([]);
+    expect(response.result).toMatchObject({
+      status: "needs_input",
+      toolName: "contaazul.interactive_service_sale_boleto",
+      missingFields: ["tenantId"],
+      choices: [
+        {
+          id: "tenant:3047702",
+          label: "MAIS NEGOCIOS"
+        }
+      ]
+    });
+  });
+
+  it("saves a live-approval draft after the interactive Conta Azul wizard plans a dry-run", async () => {
+    const registry = createToolRegistry();
+    registerInteractiveContaAzulTools(registry);
+    const provider = createFakeModelProvider({});
+    const service = await createConfereService({
+      cwd: await mkdtemp(path.join(os.tmpdir(), "confere-service-")),
+      env: { RUNTIME_MODE: "dry-run" },
+      registryFactory: async () => ({ registry, warnings: [] }),
+      modelProvider: provider
+    });
+    const sessionId = "sess_interactive_full";
+
+    await service.runAgentTurn({ request: "Emitir Novo Boleto de Serviço", sessionId });
+    await service.runAgentTurn({
+      request: "MAIS NEGOCIOS",
+      sessionId,
+      params: {
+        __interactive: { flow: "contaazul_service_sale_boleto", action: "select_tenant" },
+        tenantId: 3047702,
+        relationId: "rel_mais",
+        tenantName: "MAIS NEGOCIOS"
+      }
+    });
+    await service.runAgentTurn({ request: "AZUOS", sessionId });
+    await service.runAgentTurn({
+      request: "AZUOS ASSESSORIA CONTÁBIL LTDA",
+      sessionId,
+      params: {
+        __interactive: { flow: "contaazul_service_sale_boleto", action: "select_customer" },
+        customerId: "cust_1",
+        customerName: "AZUOS ASSESSORIA CONTÁBIL LTDA"
+      }
+    });
+    await service.runAgentTurn({ request: "Honorário contábil mensal", sessionId });
+    await service.runAgentTurn({
+      request: "Honorário contábil mensal",
+      sessionId,
+      params: {
+        __interactive: { flow: "contaazul_service_sale_boleto", action: "select_category" },
+        categoryId: "cat_1",
+        categoryName: "Honorário contábil mensal"
+      }
+    });
+    await service.runAgentTurn({ request: "Honorário Contábil", sessionId });
+    await service.runAgentTurn({
+      request: "Honorário Contábil",
+      sessionId,
+      params: {
+        __interactive: { flow: "contaazul_service_sale_boleto", action: "select_item" },
+        itemId: "item_1",
+        itemName: "Honorário Contábil"
+      }
+    });
+    await service.runAgentTurn({ request: "Honorário mensal", sessionId });
+    await service.runAgentTurn({ request: "10,00", sessionId });
+    await service.runAgentTurn({ request: "30/06/2026", sessionId });
+    await service.runAgentTurn({ request: "62991514384", sessionId });
+    await service.runAgentTurn({ request: "kamilly.agregarnegocios@gmail.com", sessionId });
+    const response = await service.runAgentTurn({
+      request: "sccontabilidadefinanceiro@gmail.com",
+      sessionId
+    });
+
+    expect(provider.calls).toEqual([]);
+    expect(response.draftOperationId).toBe("op_interactive_plan");
+    expect(service.getDraft("op_interactive_plan")).toMatchObject({
+      operationId: "op_interactive_plan",
+      toolName: "contaazul.create_service_sale_boleto_workflow",
+      params: {
+        tenantId: 3047702,
+        customerName: "AZUOS ASSESSORIA CONTÁBIL LTDA",
+        categoryName: "Honorário contábil mensal",
+        itemName: "Honorário Contábil",
+        serviceDescription: "Honorário mensal",
+        unitValueBr: "10,00",
+        dueDateBr: "30/06/2026",
+        notification: {
+          phone: "62991514384",
+          email: "kamilly.agregarnegocios@gmail.com",
+          replyTo: "sccontabilidadefinanceiro@gmail.com"
+        }
+      }
+    });
+  });
+
   it("builds the confirmation sheet from the active draft params", async () => {
     const service = await createConfereService({
       cwd: await mkdtemp(path.join(os.tmpdir(), "confere-service-")),
@@ -233,6 +365,55 @@ describe("confere service", () => {
     expect(service.getDraft("op_low")).toMatchObject({ operationId: "op_low" });
   });
 
+  it("allows live execution of the Asaas update-charge-due-date tool", async () => {
+    const calls: unknown[] = [];
+    const registry = createToolRegistry();
+    registry.register({
+      name: "asaas.update_charge_due_date",
+      description: "update due date",
+      parameters: z.object({
+        operationId: z.string().optional(),
+        approvalText: z.string().optional(),
+        chargeId: z.string(),
+        dueDateBr: z.string()
+      }),
+      execute: async (params) => {
+        calls.push(params);
+        return {
+          ...plannedReceipt("asaas.update_charge_due_date", "op_upd"),
+          status: "succeeded",
+          dryRun: false
+        } satisfies ToolReceipt;
+      }
+    });
+
+    const service = await createConfereService({
+      cwd: await mkdtemp(path.join(os.tmpdir(), "confere-service-")),
+      env: { RUNTIME_MODE: "dry-run", ALLOW_LIVE_MUTATIONS: "true" },
+      registryFactory: async () => ({ registry, warnings: [] }),
+      modelProvider: createFakeModelProvider({})
+    });
+    service.saveDraftForTest({
+      operationId: "op_upd",
+      toolName: "asaas.update_charge_due_date",
+      request: "alterar vencimento",
+      params: { chargeId: "ch_1", dueDateBr: "20/07/2026" },
+      createdAt: "2026-06-20T12:00:00.000Z"
+    });
+
+    const response = await service.executeApprovedOperation({ operationId: "op_upd" });
+
+    expect(response.status).toBe("executed");
+    expect(calls).toEqual([
+      {
+        operationId: "op_upd",
+        approvalText: "APROVAR op_upd",
+        chargeId: "ch_1",
+        dueDateBr: "20/07/2026"
+      }
+    ]);
+  });
+
   it("blocks live execution when no draft exists", async () => {
     const service = await createConfereService({
       cwd: await mkdtemp(path.join(os.tmpdir(), "confere-service-")),
@@ -299,7 +480,10 @@ describe("confere service", () => {
       })
     });
 
-    const response = await service.runAgentTurn({ request: "criar boleto", sessionId: "sess_risk" });
+    const response = await service.runAgentTurn({
+      request: "criar boleto no Asaas",
+      sessionId: "sess_risk"
+    });
 
     expect(response.draftOperationId).toBeUndefined();
     expect(response.result).toMatchObject({
@@ -403,6 +587,76 @@ function plannedReceipt(toolName: string, operationId: string): ToolReceipt {
     dryRun: true,
     summary: "planned",
     data: { approvalPreview: { operationId } },
+    artifacts: [],
+    warnings: []
+  };
+}
+
+function registerInteractiveContaAzulTools(registry: ReturnType<typeof createToolRegistry>): void {
+  registry.register({
+    name: "contaazul.list_accountancy_clients",
+    description: "tenants",
+    parameters: z.object({}),
+    execute: async () =>
+      succeededReceipt("contaazul.list_accountancy_clients", [
+        { tenantId: 3047702, relationId: "rel_mais", name: "MAIS NEGOCIOS", active: true }
+      ])
+  });
+  registry.register({
+    name: "contaazul.search_sale_customers",
+    description: "customers",
+    parameters: z.object({ relationId: z.string(), searchTerm: z.string() }),
+    execute: async () =>
+      succeededReceipt("contaazul.search_sale_customers", [
+        { id: "cust_1", name: "AZUOS ASSESSORIA CONTÁBIL LTDA" }
+      ])
+  });
+  registry.register({
+    name: "contaazul.switch_to_pro_session",
+    description: "switch",
+    parameters: z.object({ relationId: z.string() }),
+    execute: async () =>
+      succeededReceipt("contaazul.switch_to_pro_session", {
+        relationId: "rel_mais",
+        proSessionId: "relation:rel_mais",
+        authToken: "[REDACTED_SECRET]"
+      })
+  });
+  registry.register({
+    name: "contaazul.search_financial_categories",
+    description: "categories",
+    parameters: z.object({ relationId: z.string(), searchTerm: z.string() }),
+    execute: async () =>
+      succeededReceipt("contaazul.search_financial_categories", [
+        { uuid: "cat_1", dsNaturezaFinanceira: "Honorário contábil mensal" }
+      ])
+  });
+  registry.register({
+    name: "contaazul.search_service_items",
+    description: "items",
+    parameters: z.object({ relationId: z.string(), searchTerm: z.string() }),
+    execute: async () =>
+      succeededReceipt("contaazul.search_service_items", [
+        { id: "item_1", name: "Honorário Contábil" }
+      ])
+  });
+  registry.register({
+    name: "contaazul.create_service_sale_boleto_workflow",
+    description: "workflow",
+    parameters: z.object({}).passthrough(),
+    execute: async () => plannedReceipt("contaazul.create_service_sale_boleto_workflow", "op_interactive_plan")
+  });
+}
+
+function succeededReceipt<T>(toolName: string, data: T): ToolReceipt<T> {
+  return {
+    operationId: `op_${toolName.replace(/[^a-z0-9]+/gi, "_")}`,
+    provider: "contaazul",
+    toolName,
+    status: "succeeded",
+    dryRun: true,
+    summary: "succeeded",
+    data,
     artifacts: [],
     warnings: []
   };
