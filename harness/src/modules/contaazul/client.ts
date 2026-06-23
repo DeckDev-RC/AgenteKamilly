@@ -3,7 +3,12 @@ import {
   getCookieValue,
   type BrowserState
 } from "../../core/session-store.js";
-import { requestWithRetry } from "../../core/http-client.js";
+import { RECAPTURE_COMMANDS } from "../../core/recapture-commands.js";
+import {
+  readJsonOrExpired,
+  requestWithRetry,
+  SessionExpiredError
+} from "../../core/http-client.js";
 
 const SERVICES_BASE_URL = "https://services.contaazul.com";
 const ACCOUNTANCY_BASE_URL = "https://accountancy.contaazul.com";
@@ -74,16 +79,43 @@ export type DownloadBoletoPdfParams = {
 export type SearchSaleCustomersParams = {
   authToken: string;
   searchTerm: string;
+  page?: number;
+  pageSize?: number;
+};
+
+export type ListSaleCustomersParams = {
+  authToken: string;
+  searchTerm?: string;
+  maxPages?: number;
+  pageSize?: number;
 };
 
 export type SearchFinancialCategoriesParams = {
   authToken: string;
   searchTerm: string;
+  page?: number;
+  pageSize?: number;
+};
+
+export type ListFinancialCategoriesParams = {
+  authToken: string;
+  searchTerm?: string;
+  maxPages?: number;
+  pageSize?: number;
 };
 
 export type SearchServiceItemsParams = {
   authToken: string;
   searchTerm: string;
+  page?: number;
+  pageSize?: number;
+};
+
+export type ListServiceItemsParams = {
+  authToken: string;
+  searchTerm?: string;
+  maxPages?: number;
+  pageSize?: number;
 };
 
 export type ListOperationNaturesParams = {
@@ -133,8 +165,11 @@ export type ContaAzulReadClient = {
   switchToProSession(relationId: string): Promise<ContaAzulProSession>;
   searchFinancialStatement(params: SearchFinancialStatementParams): Promise<unknown[]>;
   searchSaleCustomers(params: SearchSaleCustomersParams): Promise<unknown[]>;
+  listSaleCustomers(params: ListSaleCustomersParams): Promise<unknown[]>;
   searchFinancialCategories(params: SearchFinancialCategoriesParams): Promise<unknown[]>;
+  listFinancialCategories(params: ListFinancialCategoriesParams): Promise<unknown[]>;
   searchServiceItems(params: SearchServiceItemsParams): Promise<unknown[]>;
+  listServiceItems(params: ListServiceItemsParams): Promise<unknown[]>;
   getPersonDetails(params: GetPersonDetailsParams): Promise<unknown>;
 };
 
@@ -160,11 +195,9 @@ export type ContaAzulMutationClient = ContaAzulReadClient & {
   getFinancialEventDetails(params: GetFinancialEventDetailsParams): Promise<unknown>;
 };
 
-export class ContaAzulSessionExpiredError extends Error {
-  readonly recaptureCommand = "node contaazul/capture.js";
-
+export class ContaAzulSessionExpiredError extends SessionExpiredError {
   constructor(message = "Conta Azul session expired.") {
-    super(message);
+    super("contaazul", message, RECAPTURE_COMMANDS.contaazul);
     this.name = "ContaAzulSessionExpiredError";
   }
 }
@@ -192,7 +225,7 @@ export class MappedContaAzulSessionClient implements ContaAzulMutationClient {
     if (!response.ok) {
       throw new Error(`Conta Azul client list failed with HTTP ${response.status}.`);
     }
-    return response.json();
+    return readJsonOrExpired(response, "contaazul", RECAPTURE_COMMANDS.contaazul);
   }
 
   async switchToProSession(relationId: string): Promise<ContaAzulProSession> {
@@ -275,10 +308,97 @@ export class MappedContaAzulSessionClient implements ContaAzulMutationClient {
   }
 
   async searchSaleCustomers(params: SearchSaleCustomersParams): Promise<unknown[]> {
+    return this.fetchSaleCustomersPage({
+      authToken: params.authToken,
+      searchTerm: params.searchTerm,
+      page: params.page ?? 1,
+      pageSize: params.pageSize ?? 20
+    });
+  }
+
+  async listSaleCustomers(params: ListSaleCustomersParams): Promise<unknown[]> {
+    return this.fetchAllPaginated((page, pageSize) =>
+      this.fetchSaleCustomersPage({
+        authToken: params.authToken,
+        searchTerm: params.searchTerm ?? "",
+        page,
+        pageSize
+      })
+    , params.pageSize ?? 100, params.maxPages ?? 20);
+  }
+
+  async searchFinancialCategories(params: SearchFinancialCategoriesParams): Promise<unknown[]> {
+    return this.fetchFinancialCategoriesPage({
+      authToken: params.authToken,
+      searchTerm: params.searchTerm,
+      page: params.page ?? 0,
+      pageSize: params.pageSize ?? 20
+    });
+  }
+
+  async listFinancialCategories(params: ListFinancialCategoriesParams): Promise<unknown[]> {
+    const pageSize = params.pageSize ?? 100;
+    const maxPages = params.maxPages ?? 20;
+    const allItems: unknown[] = [];
+    for (let page = 0; page < maxPages; page++) {
+      const items = await this.fetchFinancialCategoriesPage({
+        authToken: params.authToken,
+        searchTerm: params.searchTerm ?? "",
+        page,
+        pageSize
+      });
+      if (items.length === 0) break;
+      allItems.push(...items);
+      if (items.length < pageSize) break;
+    }
+    return allItems;
+  }
+
+  async searchServiceItems(params: SearchServiceItemsParams): Promise<unknown[]> {
+    return this.fetchServiceItemsPage({
+      authToken: params.authToken,
+      searchTerm: params.searchTerm,
+      page: params.page ?? 1,
+      pageSize: params.pageSize ?? 20
+    });
+  }
+
+  async listServiceItems(params: ListServiceItemsParams): Promise<unknown[]> {
+    return this.fetchAllPaginated((page, pageSize) =>
+      this.fetchServiceItemsPage({
+        authToken: params.authToken,
+        searchTerm: params.searchTerm ?? "",
+        page,
+        pageSize
+      })
+    , params.pageSize ?? 100, params.maxPages ?? 20);
+  }
+
+  private async fetchAllPaginated(
+    fetchPage: (page: number, pageSize: number) => Promise<unknown[]>,
+    pageSize: number,
+    maxPages: number
+  ): Promise<unknown[]> {
+    const allItems: unknown[] = [];
+    for (let page = 1; page <= maxPages; page++) {
+      const items = await fetchPage(page, pageSize);
+      if (items.length === 0) break;
+      allItems.push(...items);
+      if (items.length < pageSize) break;
+    }
+    return allItems;
+  }
+
+  private async fetchSaleCustomersPage(params: {
+    authToken: string;
+    searchTerm: string;
+    page: number;
+    pageSize: number;
+  }): Promise<unknown[]> {
     const response = await this.request(
       `${SERVICES_BASE_URL}/contaazul-bff/person-registration/v2/persons?search_term=${encodeURIComponent(
         params.searchTerm
-      )}&page=1&page_size=20&profile_type=CUSTOMER&person_status=active&recover_legacy_id=true&textual_search_only=true`,
+      )}&page=${params.page}&page_size=${params.pageSize}&profile_type=CUSTOMER&person_status=active&recover_legacy_id=true&textual_search_only=true`,
       {
         headers: proReadHeaders(params.authToken)
       }
@@ -291,9 +411,14 @@ export class MappedContaAzulSessionClient implements ContaAzulMutationClient {
     return Array.isArray(json.items) ? json.items : [];
   }
 
-  async searchFinancialCategories(params: SearchFinancialCategoriesParams): Promise<unknown[]> {
+  private async fetchFinancialCategoriesPage(params: {
+    authToken: string;
+    searchTerm: string;
+    page: number;
+    pageSize: number;
+  }): Promise<unknown[]> {
     const response = await this.request(
-      `${SERVICES_BASE_URL}/app/financialCategory/autocomplete?page=0&pageSize=20&textualSearch=${encodeURIComponent(
+      `${SERVICES_BASE_URL}/app/financialCategory/autocomplete?page=${params.page}&pageSize=${params.pageSize}&textualSearch=${encodeURIComponent(
         params.searchTerm
       )}&type=RECEITA&financeOrigin=SALES`,
       {
@@ -308,9 +433,14 @@ export class MappedContaAzulSessionClient implements ContaAzulMutationClient {
     return Array.isArray(json.data) ? json.data : [];
   }
 
-  async searchServiceItems(params: SearchServiceItemsParams): Promise<unknown[]> {
+  private async fetchServiceItemsPage(params: {
+    authToken: string;
+    searchTerm: string;
+    page: number;
+    pageSize: number;
+  }): Promise<unknown[]> {
     const response = await this.request(
-      `${SERVICES_BASE_URL}/inventory/v1/products?page=1&page_size=20&search=${encodeURIComponent(
+      `${SERVICES_BASE_URL}/inventory/v1/products?page=${params.page}&page_size=${params.pageSize}&search=${encodeURIComponent(
         params.searchTerm
       )}&serviceType=PROVIDED&searchProductKitEnabled=true`,
       {

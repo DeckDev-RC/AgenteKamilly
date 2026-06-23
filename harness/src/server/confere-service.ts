@@ -5,6 +5,9 @@ import { runAgentTurn } from "../agent/agent-runner.js";
 import { createAgentModelProvider } from "../agent/model-provider-factory.js";
 import type { ModelProvider } from "../agent/model-provider.js";
 import { loadHarnessConfig, type HarnessConfig } from "../core/config.js";
+import { checkConnections, type ConnectionHealth } from "../core/connection-health.js";
+import { SessionExpiredError } from "../core/http-client.js";
+import { createPreferencesStore } from "../core/preferences-store.js";
 import {
   createDefaultMappedToolRegistry,
   resolveConfigCwd,
@@ -40,9 +43,11 @@ import {
   createInteractiveFlowStore,
   runInteractiveFlowTurn
 } from "./interactive-flow-controller.js";
+import { formatAgentBlockedMessage } from "./agent-user-messages.js";
 
 export type ConfereService = {
   getStatus(): Promise<ConfereStatus>;
+  checkConnections(): Promise<ConnectionHealth[]>;
   runAgentTurn(input: AgentTurnApiRequest): Promise<AgentTurnApiResponse>;
   getConfirmationSheet(operationId: string): Promise<ConfirmationSheetApiResponse>;
   executeApprovedOperation(input: ExecuteOperationApiRequest): Promise<ExecuteOperationApiResponse>;
@@ -91,6 +96,11 @@ export async function createConfereService(
       cwd
     );
   }
+
+  // Memória de preferências (última empresa, clientes recentes) persistida no disco.
+  const preferencesStore = createPreferencesStore(
+    path.join(loadConfig("dry-run").artifactsDir, "preferences.json")
+  );
 
   async function runtime(runtimeMode?: "dry-run" | "live"): Promise<{
     config: HarnessConfig;
@@ -150,58 +160,88 @@ export async function createConfereService(
       };
     },
 
+    async checkConnections() {
+      const config = loadConfig("dry-run");
+      return checkConnections(config);
+    },
+
     async runAgentTurn(input) {
       const { config, registry, warnings } = await runtime("dry-run");
-      const params = {
-        ...(input.params ?? {}),
-        ...(input.operatorConfirmation ? { operatorConfirmation: true } : {})
-      };
-      const interactive = await runInteractiveFlowTurn({
-        request: input.request,
-        registry,
-        sessionId: input.sessionId,
-        store: interactiveFlowStore,
-        params
-      });
-      if (interactive.handled) {
-        if (interactive.draft) {
-          draftStore.save({
-            operationId: interactive.draft.operationId,
-            toolName: interactive.draft.toolName,
-            request: input.request,
-            params: interactive.draft.params,
-            createdAt: new Date().toISOString()
-          });
+      try {
+        const params = {
+          ...(input.params ?? {}),
+          ...(input.operatorConfirmation ? { operatorConfirmation: true } : {})
+        };
+        const interactive = await runInteractiveFlowTurn({
+          request: input.request,
+          registry,
+          sessionId: input.sessionId,
+          store: interactiveFlowStore,
+          params,
+          memory: preferencesStore
+        });
+        if (interactive.handled) {
+          const draftsToSave = interactive.drafts?.length
+            ? interactive.drafts
+            : interactive.draft
+              ? [interactive.draft]
+              : [];
+          for (const draft of draftsToSave) {
+            draftStore.save({
+              operationId: draft.operationId,
+              toolName: draft.toolName,
+              request: input.request,
+              params: draft.params,
+              createdAt: new Date().toISOString()
+            });
+          }
+          return {
+            status: "ok",
+            result: interactive.result,
+            draftOperationId: interactive.draftOperationId,
+            warnings
+          };
         }
+
+        const provider = options.modelProvider ?? createAgentModelProvider(config);
+        const result = await runAgentTurn({
+          request: input.request,
+          registry,
+          provider,
+          runtimeMode: "dry-run",
+          params,
+          sessionId: input.sessionId,
+          sessionsDir: config.agentSessionsDir
+        });
+        const draftOperationId = saveDraftFromAgentResult({
+          draftStore,
+          request: input.request,
+          result
+        });
         return {
           status: "ok",
-          result: interactive.result,
-          draftOperationId: interactive.draftOperationId,
+          result: toAgentResultView(result),
+          draftOperationId,
+          warnings
+        };
+      } catch (error) {
+        const expired = sessionExpiredMessage(error);
+        if (!expired) throw error;
+        return {
+          status: "ok",
+          result: {
+            status: "blocked",
+            missingFields: [],
+            questions: [],
+            warnings: [],
+            approvalAvailable: false,
+            reason: expired.message,
+            summary: expired.message,
+            toolName: expired.provider ? `${expired.provider}.session` : undefined
+          },
           warnings
         };
       }
-
-      const provider = options.modelProvider ?? createAgentModelProvider(config);
-      const result = await runAgentTurn({
-        request: input.request,
-        registry,
-        provider,
-        runtimeMode: "dry-run",
-        params,
-        sessionId: input.sessionId,
-        sessionsDir: config.agentSessionsDir
-      });
-      const draftOperationId = saveDraftFromAgentResult({
-        draftStore,
-        request: input.request,
-        result
-      });
-      return {
-        status: "ok",
-        result: toAgentResultView(result),
-        draftOperationId,
-        warnings
-      };
     },
 
     async getConfirmationSheet(operationId) {
@@ -253,7 +293,7 @@ export async function createConfereService(
         return { status: "blocked", reason: `Mapped tool is not registered: ${draft.toolName}` };
       }
       const params = tool.parameters.parse({
-        ...draft.params,
+        ...normalizeDraftParamsForExecution(draft.toolName, draft.params),
         operationId: input.operationId,
         approvalText: `APROVAR ${input.operationId}`
       });
@@ -314,6 +354,38 @@ export async function createConfereService(
   };
 }
 
+const PROVIDER_LABEL: Record<string, string> = {
+  asaas: "Asaas",
+  contaazul: "Conta Azul"
+};
+
+/**
+ * Traduz erros de sessão expirada em uma mensagem amigável. Cobre tanto o
+ * `SessionExpiredError` (caminhos já tratados) quanto a rede de segurança para o
+ * `SyntaxError` cru de "Unexpected token '<'" (quando algum read ainda faz
+ * `response.json()` direto numa página de login HTML).
+ */
+function sessionExpiredMessage(
+  error: unknown
+): { provider?: "asaas" | "contaazul"; message: string } | undefined {
+  if (error instanceof SessionExpiredError) {
+    const label = PROVIDER_LABEL[error.provider] ?? error.provider;
+    return {
+      provider: error.provider,
+      message: `Sessão do ${label} expirada ou inválida. Vá em Sessões → Renovar credenciais.`
+    };
+  }
+  if (
+    error instanceof SyntaxError &&
+    /Unexpected token '<'|<!DOCTYPE|is not valid JSON/i.test(error.message)
+  ) {
+    return {
+      message: "Uma sessão (Asaas ou Conta Azul) expirou. Vá em Sessões → Renovar credenciais."
+    };
+  }
+  return undefined;
+}
+
 function saveDraftFromAgentResult(input: {
   draftStore: DraftStore;
   request: string;
@@ -349,6 +421,27 @@ const LIVE_APPROVAL_TOOL_ALLOWLIST = new Set([
 
 function isLiveApprovalToolAllowed(toolName: string): boolean {
   return LIVE_APPROVAL_TOOL_ALLOWLIST.has(toolName);
+}
+
+function normalizeDraftParamsForExecution(
+  toolName: string,
+  params: Record<string, unknown>
+): Record<string, unknown> {
+  if (toolName !== "asaas.update_charge_due_date") return params;
+  if (stringValue(params.chargeId)) return params;
+
+  const fromArray = params.chargeIds;
+  if (Array.isArray(fromArray) && fromArray.length > 0) {
+    return { ...params, chargeId: String(fromArray[0]) };
+  }
+
+  const csv = stringValue(params.chargeIds);
+  if (csv) {
+    const [first] = csv.split(",").map((part) => part.trim()).filter(Boolean);
+    if (first) return { ...params, chargeId: first };
+  }
+
+  return params;
 }
 
 function confirmationSheetFromDraft(draft: OperationDraft): ConfirmationSheetView {
@@ -457,8 +550,8 @@ function toAgentResultView(result: Awaited<ReturnType<typeof runAgentTurn>>) {
     questions: [],
     warnings: [],
     approvalAvailable: false,
-    reason: "reason" in result ? result.reason : undefined,
+    reason: formatAgentBlockedMessage("reason" in result ? result.reason : undefined),
     toolName: "toolName" in result ? result.toolName : undefined,
-    summary: "reason" in result ? result.reason : undefined
+    summary: formatAgentBlockedMessage("reason" in result ? result.reason : undefined)
   };
 }

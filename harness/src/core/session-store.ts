@@ -1,6 +1,8 @@
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 
+import { RECAPTURE_COMMANDS } from "./recapture-commands.js";
+
 export type SessionHealth =
   | { ok: true; provider: "asaas" | "contaazul" }
   | {
@@ -28,7 +30,7 @@ export function checkSessionFile(provider: "asaas" | "contaazul", filePath: stri
       ok: false,
       provider,
       reason: `Session file not found: ${filePath}`,
-      recaptureCommand: provider === "contaazul" ? "node contaazul/capture.js" : undefined
+      recaptureCommand: provider === "contaazul" ? RECAPTURE_COMMANDS.contaazul : undefined
     };
   }
   return { ok: true, provider };
@@ -74,7 +76,7 @@ export function checkContaAzulSessionState(
       ok: false,
       provider: "contaazul",
       reason: "Conta Azul session is missing auth-token-accountancy.",
-      recaptureCommand: "node contaazul/capture.js"
+      recaptureCommand: RECAPTURE_COMMANDS.contaazul
     };
   }
 
@@ -83,7 +85,7 @@ export function checkContaAzulSessionState(
       ok: false,
       provider: "contaazul",
       reason: "Conta Azul session cookie is expired.",
-      recaptureCommand: "node contaazul/capture.js"
+      recaptureCommand: RECAPTURE_COMMANDS.contaazul
     };
   }
 

@@ -41,19 +41,37 @@ export function filterCustomersByQuery(
   );
 }
 
-export function parsePendingChargesTableContent(
+export type AsaasChargeListFilter = {
+  statusFilter?: "all" | "pending";
+  billingType?: "all" | "boleto";
+};
+
+export function parseChargesTableContent(
   content: string,
-  customerId: string
+  customerId: string,
+  filter: AsaasChargeListFilter = {}
 ): PendingCharge[] {
+  const statusFilter = filter.statusFilter ?? "all";
+  const billingTypeFilter = filter.billingType ?? "all";
   const charges: PendingCharge[] = [];
   const rowRegex = /data-payment-id=["']([^"']+)["']([\s\S]*?)(?=data-payment-id=["']|$)/g;
   let match: RegExpExecArray | null;
 
   while ((match = rowRegex.exec(content)) !== null) {
     const [, id, row] = match;
-    const status = extractAttribute(row, "tooltip") ?? extractAttribute(row, "data-original-title");
+    const billingType = extractAttribute(row, "data-billing-type");
+    if (
+      billingTypeFilter === "boleto" &&
+      billingType &&
+      normalizeForSearch(billingType) !== "boleto"
+    ) {
+      continue;
+    }
 
-    if (normalizeForSearch(status ?? "") !== "aguardando pagamento") {
+    const status = extractAttribute(row, "tooltip") ?? extractAttribute(row, "data-original-title");
+    const normalizedStatus = status ? normalizeText(status) : "Desconhecido";
+
+    if (statusFilter === "pending" && normalizeForSearch(normalizedStatus) !== "aguardando pagamento") {
       continue;
     }
 
@@ -67,7 +85,7 @@ export function parsePendingChargesTableContent(
       customerId,
       valueBr,
       dueDateBr,
-      status: status ? normalizeText(status) : "Desconhecido"
+      status: normalizedStatus
     };
 
     if (customerName) charge.customerName = customerName;
@@ -77,6 +95,13 @@ export function parsePendingChargesTableContent(
   }
 
   return charges;
+}
+
+export function parsePendingChargesTableContent(
+  content: string,
+  customerId: string
+): PendingCharge[] {
+  return parseChargesTableContent(content, customerId, { statusFilter: "pending" });
 }
 
 export function parseChargeLinksFromHtml(html: string, chargeId: string): ChargeLinks {

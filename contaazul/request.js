@@ -8,7 +8,7 @@ const BASE_URL = 'https://mais.contaazul.com';
 async function main() {
     const statePath = path.resolve(__dirname, 'state.json');
     if (!fs.existsSync(statePath)) {
-        console.error('ERRO: state.json não encontrado. Execute "node contaazul/capture.js" primeiro.');
+        console.error('ERRO: state.json não encontrado. Execute "node renew-session.cjs contaazul" na raiz do projeto primeiro.');
         process.exit(1);
     }
 

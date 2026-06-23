@@ -19,6 +19,8 @@ export type OperationSummary = {
   chargeUrl?: string;
   customerName?: string;
   dueDateIso?: string;
+  dueDateBr?: string;
+  chargeId?: string;
   unitValue?: number | string;
   artifacts: Artifact[];
   warnings: string[];
@@ -108,7 +110,9 @@ function summaryFromEntries(
     saleNumber: stringOrNumber(summary?.saleNumber),
     chargeUrl: stringValue(summary?.chargeUrl),
     customerName: stringValue(summary?.customerName),
-    dueDateIso: stringValue(summary?.dueDateIso),
+    dueDateIso: stringValue(summary?.dueDateIso) ?? stringValue(summary?.dueDateBr),
+    dueDateBr: stringValue(summary?.dueDateBr),
+    chargeId: stringValue(summary?.chargeId),
     unitValue: stringOrNumber(summary?.unitValue),
     artifacts,
     warnings: unique(entries.flatMap((entry) => entry.warnings)),

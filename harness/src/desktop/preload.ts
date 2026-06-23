@@ -1,7 +1,20 @@
 import { contextBridge, ipcRenderer } from "electron";
 
+type RenewProvider = import("../server/api-types.js").RenewProvider;
+type RenewEvent = import("../server/api-types.js").RenewEvent;
+
 contextBridge.exposeInMainWorld("confere", {
   getStatus: () => ipcRenderer.invoke("confere:get-status"),
+  checkConnections: () => ipcRenderer.invoke("confere:check-connections"),
+  renewConnection: (provider: RenewProvider) =>
+    ipcRenderer.invoke("confere:renew-connection", provider),
+  confirmRenew: (provider: RenewProvider) =>
+    ipcRenderer.invoke("confere:renew-confirm", provider),
+  onRenewEvent: (callback: (event: RenewEvent) => void) => {
+    const handler = (_event: unknown, payload: RenewEvent): void => callback(payload);
+    ipcRenderer.on("confere:renew-event", handler);
+    return () => ipcRenderer.removeListener("confere:renew-event", handler);
+  },
   runAgentTurn: (input: import("../server/api-types.js").AgentTurnApiRequest) =>
     ipcRenderer.invoke("confere:run-agent-turn", input),
   listOperations: () => ipcRenderer.invoke("confere:list-operations"),

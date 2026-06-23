@@ -70,20 +70,35 @@ export const ContaAzulSearchFinancialStatementParamsSchema = z.object({
   query: z.string().optional()
 });
 
-export const ContaAzulSearchSaleCustomersParamsSchema = z.object({
-  relationId: z.string().min(1),
-  searchTerm: z.string().min(1)
-});
+export const ContaAzulSearchSaleCustomersParamsSchema = z
+  .object({
+    relationId: z.string().min(1),
+    searchTerm: z.string().optional(),
+    listAll: z.boolean().optional()
+  })
+  .refine((data) => data.listAll === true || (data.searchTerm?.length ?? 0) >= 1, {
+    message: "searchTerm is required unless listAll is true"
+  });
 
-export const ContaAzulSearchFinancialCategoriesParamsSchema = z.object({
-  relationId: z.string().min(1),
-  searchTerm: z.string().min(1)
-});
+export const ContaAzulSearchFinancialCategoriesParamsSchema = z
+  .object({
+    relationId: z.string().min(1),
+    searchTerm: z.string().optional(),
+    listAll: z.boolean().optional()
+  })
+  .refine((data) => data.listAll === true || (data.searchTerm?.length ?? 0) >= 1, {
+    message: "searchTerm is required unless listAll is true"
+  });
 
-export const ContaAzulSearchServiceItemsParamsSchema = z.object({
-  relationId: z.string().min(1),
-  searchTerm: z.string().min(1)
-});
+export const ContaAzulSearchServiceItemsParamsSchema = z
+  .object({
+    relationId: z.string().min(1),
+    searchTerm: z.string().optional(),
+    listAll: z.boolean().optional()
+  })
+  .refine((data) => data.listAll === true || (data.searchTerm?.length ?? 0) >= 1, {
+    message: "searchTerm is required unless listAll is true"
+  });
 
 export const ContaAzulGetPersonDetailsParamsSchema = z.object({
   relationId: z.string().min(1),
@@ -517,10 +532,15 @@ export function createContaAzulReadTools(
       if (blocked) return blocked;
 
       try {
-        const data = await options.client.searchSaleCustomers({
-          authToken: authToken!,
-          searchTerm: params.searchTerm
-        });
+        const data = params.listAll
+          ? await options.client.listSaleCustomers({
+              authToken: authToken!,
+              searchTerm: params.searchTerm
+            })
+          : await options.client.searchSaleCustomers({
+              authToken: authToken!,
+              searchTerm: params.searchTerm!
+            });
         return writeReceipt({
           ledgerPath: options.ledgerPath,
           operationId,
@@ -563,10 +583,15 @@ export function createContaAzulReadTools(
       if (blocked) return blocked;
 
       try {
-        const data = await options.client.searchFinancialCategories({
-          authToken: authToken!,
-          searchTerm: params.searchTerm
-        });
+        const data = params.listAll
+          ? await options.client.listFinancialCategories({
+              authToken: authToken!,
+              searchTerm: params.searchTerm
+            })
+          : await options.client.searchFinancialCategories({
+              authToken: authToken!,
+              searchTerm: params.searchTerm!
+            });
         return writeReceipt({
           ledgerPath: options.ledgerPath,
           operationId,
@@ -609,10 +634,15 @@ export function createContaAzulReadTools(
       if (blocked) return blocked;
 
       try {
-        const data = await options.client.searchServiceItems({
-          authToken: authToken!,
-          searchTerm: params.searchTerm
-        });
+        const data = params.listAll
+          ? await options.client.listServiceItems({
+              authToken: authToken!,
+              searchTerm: params.searchTerm
+            })
+          : await options.client.searchServiceItems({
+              authToken: authToken!,
+              searchTerm: params.searchTerm!
+            });
         return writeReceipt({
           ledgerPath: options.ledgerPath,
           operationId,
@@ -637,6 +667,7 @@ export function createContaAzulReadTools(
     },
 
     async getPersonDetails(rawParams) {
+      const skipRedaction = asRecord(rawParams)?.__skipDataRedaction === true;
       const params = ContaAzulGetPersonDetailsParamsSchema.parse(rawParams);
       const operationId = createOperationId(GET_PERSON_DETAILS_TOOL);
       const authToken = proSessions.get(params.relationId);
@@ -670,6 +701,7 @@ export function createContaAzulReadTools(
           summary: "Detalhes do cliente carregados no Conta Azul.",
           args: params,
           data,
+          redactData: !skipRedaction,
           responseSummary: {
             personUuid: params.personUuid,
             name: stringField(data, "name")
@@ -2044,7 +2076,9 @@ async function writeReceipt<T>(input: {
   responseSummary?: unknown;
   candidates?: string[];
   fieldName?: string;
+  redactData?: boolean;
 }): Promise<ToolReceipt<T>> {
+  const redactData = input.redactData !== false;
   const receipt: ToolReceipt<T> = {
     operationId: input.operationId,
     provider: "contaazul",
@@ -2052,7 +2086,7 @@ async function writeReceipt<T>(input: {
     status: input.status,
     dryRun: input.runtimeMode === "dry-run",
     summary: input.summary,
-    data: redact(input.data),
+    data: redactData ? redact(input.data) : input.data,
     artifacts: [],
     warnings: input.warnings ?? [],
     ...(input.candidates ? { candidates: input.candidates } : {}),

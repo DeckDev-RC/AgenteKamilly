@@ -4,6 +4,16 @@ declare global {
   interface Window {
     confere?: {
       getStatus(): Promise<import("../server/api-types.js").ConfereStatus>;
+      checkConnections(): Promise<import("../server/api-types.js").CheckConnectionsApiResponse>;
+      renewConnection(
+        provider: import("../server/api-types.js").RenewProvider
+      ): Promise<import("../server/api-types.js").RenewStartApiResponse>;
+      confirmRenew(
+        provider: import("../server/api-types.js").RenewProvider
+      ): Promise<{ status: "ok" }>;
+      onRenewEvent(
+        callback: (event: import("../server/api-types.js").RenewEvent) => void
+      ): () => void;
       runAgentTurn(
         input: import("../server/api-types.js").AgentTurnApiRequest
       ): Promise<import("../server/api-types.js").AgentTurnApiResponse>;

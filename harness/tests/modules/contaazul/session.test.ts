@@ -39,7 +39,7 @@ describe("Conta Azul session state", () => {
     expect(health.ok).toBe(false);
     if (health.ok) throw new Error("expected blocked session health");
     expect(health.reason).toContain("auth-token-accountancy");
-    expect(health.recaptureCommand).toContain("contaazul/capture.js");
+    expect(health.recaptureCommand).toContain("renew-session.cjs contaazul");
   });
 
   it("blocks expired cookies with recapture instruction", async () => {
@@ -53,7 +53,7 @@ describe("Conta Azul session state", () => {
     expect(health.ok).toBe(false);
     if (health.ok) throw new Error("expected blocked session health");
     expect(health.reason).toContain("expired");
-    expect(health.recaptureCommand).toBe("node contaazul/capture.js");
+    expect(health.recaptureCommand).toBe("node renew-session.cjs contaazul");
   });
 });
 

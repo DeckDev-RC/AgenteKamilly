@@ -1,23 +1,33 @@
 import {
   AlertTriangle,
+  CalendarClock,
   CheckCircle2,
   CircleDot,
   ClipboardList,
   Command,
+  CornerDownLeft,
+  FileDown,
+  FileText,
   Loader2,
-  Paperclip,
+  Receipt,
   RotateCcw,
   Send,
   ShieldCheck,
-  Sparkles
+  Sparkles,
+  UserPlus
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { KeyboardEvent, ReactElement } from "react";
 
 import type { OperationSummary } from "../../core/operation-summary.js";
+import type { Artifact } from "../../core/tool-types.js";
 import type { AgentResultView, ConfirmationSheetView } from "../../server/api-types.js";
 import { executeOperation, getConfirmationSheet, getOperation, runAgentTurn } from "../api.js";
 import { ConfirmationSheet } from "../components/ConfirmationSheet.js";
+import { ChoiceSearchPicker } from "../components/ChoiceSearchPicker.js";
+import { ChoiceSelectList } from "../components/ChoiceSelectList.js";
+import { ChatInlineForm } from "../components/ChatInlineForm.js";
 import { PixelynAvatar } from "../components/PixelynAvatar.js";
 import { PlanCard, type PlanFacts } from "../components/PlanCard.js";
 import {
@@ -25,6 +35,8 @@ import {
   type PixelynPhase,
   type PixelynState
 } from "../lib/pixelyn-state.js";
+import { inferChoicePicker } from "../lib/choice-picker.js";
+import { inferInlineForm } from "../lib/inline-form.js";
 
 type ChatMessage =
   | {
@@ -42,11 +54,37 @@ type ChatMessage =
       timestamp: string;
     };
 
-const ANCHORED_OPERATIONS: { label: string; action: string }[] = [
-  { label: "Mudar boleto · Asaas", action: "start_asaas_update_due_date" },
-  { label: "Emitir boleto · Conta Azul", action: "start_contaazul_service_sale" },
-  { label: "Criar cliente · Conta Azul", action: "start_contaazul_create_customer" },
-  { label: "Mudar vencimento · Conta Azul", action: "start_contaazul_update_due_date" }
+const ANCHORED_OPERATIONS: { label: string; action: string; icon: LucideIcon; hint: string }[] = [
+  {
+    label: "Baixar boleto · Asaas",
+    action: "start_asaas_download_boleto",
+    icon: FileDown,
+    hint: "Buscar cobrança existente e baixar o PDF"
+  },
+  {
+    label: "Mudar boleto · Asaas",
+    action: "start_asaas_update_due_date",
+    icon: CalendarClock,
+    hint: "Reagendar vencimento de uma cobrança"
+  },
+  {
+    label: "Emitir boleto · Conta Azul",
+    action: "start_contaazul_service_sale",
+    icon: Receipt,
+    hint: "Venda de serviço com boleto"
+  },
+  {
+    label: "Criar cliente · Conta Azul",
+    action: "start_contaazul_create_customer",
+    icon: UserPlus,
+    hint: "Cadastrar um novo cliente"
+  },
+  {
+    label: "Mudar vencimento · Conta Azul",
+    action: "start_contaazul_update_due_date",
+    icon: CalendarClock,
+    hint: "Ajustar a data de um lançamento"
+  }
 ];
 
 const DEFAULT_PENDING_FIELDS = ["Cliente", "Valor", "Vencimento", "Plataforma"];
@@ -80,6 +118,9 @@ const FIELD_LABELS: Record<string, string> = {
   billingPhone: "Telefone de cobrança",
   createBoleto: "Gerar boleto?",
   dueDateBr: "Vencimento",
+  chargeIds: "Cobranças pendentes",
+  chargeId: "Cobrança",
+  operation: "Operação",
   unitValueBr: "Valor unitário",
   serviceDescription: "Descrição do serviço",
   "notification.email": "E-mail de cobrança",
@@ -116,20 +157,61 @@ function timeLabel(): string {
   });
 }
 
+function isDownloadBoletoIntent(result?: AgentResultView): boolean {
+  return (
+    result?.intent === "download_boleto" ||
+    result?.intent === "download_boleto_pdf" ||
+    Boolean(result?.toolName?.includes("download_boleto"))
+  );
+}
+
 function factsFromOperation(
   operation: OperationSummary | undefined,
   result: AgentResultView
 ): PlanFacts {
+  const action = planActionLabel(result);
+  const receiptData = asReceiptRecord(result.receiptData);
+  const approvalPreview = asReceiptRecord(receiptData?.approvalPreview);
+  const changes = Array.isArray(approvalPreview?.changes) ? approvalPreview.changes : [];
+  const dueDateChange = changes.find(
+    (change) => change && typeof change === "object" && (change as { field?: string }).field === "dueDate"
+  ) as { to?: string } | undefined;
+
   return {
-    customerName: operation?.customerName,
+    customerName: operation?.customerName ?? stringValue(receiptData?.customerName),
     value: formatMoney(operation?.unitValue),
-    dueDate: formatDate(operation?.dueDateIso),
-    action: result.toolName?.includes("asaas")
-      ? "Gerar boleto · Asaas"
-      : result.toolName?.includes("contaazul")
-        ? "Venda + boleto · Conta Azul"
-        : "Preparar cobrança"
+    dueDate:
+      formatDate(operation?.dueDateIso) ??
+      formatDateBr(stringValue(dueDateChange?.to)) ??
+      formatDateBr(stringValue(receiptData?.dueDateBr)),
+    action
   };
+}
+
+function planActionLabel(result: AgentResultView): string {
+  if (result.intent === "update_charge_due_date") {
+    return result.provider === "asaas" ? "Alterar vencimento · Asaas" : "Alterar vencimento";
+  }
+  if (result.intent === "download_boleto" || result.intent === "download_boleto_pdf" || result.toolName?.includes("download")) {
+    return "Baixar boleto · Asaas";
+  }
+  if (result.toolName?.includes("asaas")) return "Gerar boleto · Asaas";
+  if (result.toolName?.includes("contaazul")) return "Venda + boleto · Conta Azul";
+  return "Preparar cobrança";
+}
+
+function asReceiptRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function formatDateBr(value: string | undefined): string | undefined {
+  return value;
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
 }
 
 function formatMoney(value: string | number | undefined): string | undefined {
@@ -156,16 +238,164 @@ function formatField(field: string): string {
   return FIELD_LABELS[field] ?? field.replace(/([a-z])([A-Z])/g, "$1 $2");
 }
 
+function isLiveSuccess(result?: AgentResultView, operation?: OperationSummary): boolean {
+  return result?.receiptStatus === "succeeded" || operation?.latestStatus === "succeeded";
+}
+
+function isLiveFailure(result?: AgentResultView, operation?: OperationSummary): boolean {
+  return result?.receiptStatus === "failed" || operation?.latestStatus === "failed";
+}
+
+type DueDateUpdateDetails = {
+  customerName?: string;
+  chargeId?: string;
+  dueDateBr?: string;
+};
+
+type DownloadBoletoDetails = {
+  customerName?: string;
+  chargeId?: string;
+  chargeLabel?: string;
+  valueBr?: string;
+  dueDateBr?: string;
+};
+
+function resolveDownloadBoletoDetails(
+  result: AgentResultView,
+  operation?: OperationSummary
+): DownloadBoletoDetails {
+  const receiptData = asReceiptRecord(result.receiptData);
+
+  return {
+    customerName: operation?.customerName ?? stringValue(receiptData?.customerName),
+    chargeId: operation?.chargeId ?? stringValue(receiptData?.chargeId),
+    chargeLabel: stringValue(receiptData?.chargeLabel),
+    valueBr:
+      formatMoney(operation?.unitValue) ??
+      stringValue(receiptData?.valueBr),
+    dueDateBr:
+      operation?.dueDateBr ??
+      formatDate(operation?.dueDateIso) ??
+      stringValue(receiptData?.dueDateBr)
+  };
+}
+
+function resolveDueDateUpdateDetails(
+  result: AgentResultView,
+  operation?: OperationSummary
+): DueDateUpdateDetails {
+  const receiptData = asReceiptRecord(result.receiptData);
+  const approvalPreview = asReceiptRecord(receiptData?.approvalPreview);
+  const target = asReceiptRecord(approvalPreview?.target);
+  const changes = Array.isArray(approvalPreview?.changes) ? approvalPreview.changes : [];
+  const dueDateChange = changes.find(
+    (change) => change && typeof change === "object" && (change as { field?: string }).field === "dueDate"
+  ) as { to?: string } | undefined;
+
+  return {
+    customerName: operation?.customerName ?? stringValue(receiptData?.customerName),
+    chargeId:
+      operation?.chargeId ??
+      stringValue(target?.chargeId) ??
+      stringValue(receiptData?.chargeId),
+    dueDateBr:
+      operation?.dueDateBr ??
+      operation?.dueDateIso ??
+      formatDateBr(stringValue(dueDateChange?.to)) ??
+      formatDateBr(stringValue(receiptData?.dueDateBr))
+  };
+}
+
+function operationSuccessMessage(result: AgentResultView, operation?: OperationSummary): string {
+  if (result.intent === "update_charge_due_date") {
+    const details = resolveDueDateUpdateDetails(result, operation);
+    const hasPdf =
+      (operation?.artifacts ?? []).some((artifact) => artifact.kind === "pdf") ||
+      artifactsFromReceiptData(result.receiptData).some((artifact) => artifact.kind === "pdf");
+
+    if (details.chargeId && details.dueDateBr) {
+      const who = details.customerName ? ` de ${details.customerName}` : "";
+      if (hasPdf) {
+        return `Vencimento alterado com sucesso${who}! Cobrança ${details.chargeId} agora vence em ${details.dueDateBr}. Baixe o PDF atualizado abaixo.`;
+      }
+      return `Vencimento alterado com sucesso${who}! Cobrança ${details.chargeId} agora vence em ${details.dueDateBr}.`;
+    }
+    return operation?.summary ?? result.summary ?? "Vencimento atualizado no Asaas.";
+  }
+
+  if (isDownloadBoletoIntent(result)) {
+    const details = resolveDownloadBoletoDetails(result, operation);
+    const who = details.customerName ? ` de ${details.customerName}` : "";
+    const chargeRef = details.chargeId ? ` (cobrança ${details.chargeId})` : "";
+    return `PDF do boleto${who}${chargeRef} baixado com sucesso. Abra o arquivo abaixo.`;
+  }
+
+  const sale = operation?.saleNumber;
+  return sale
+    ? `Boleto emitido com sucesso! Venda nº ${sale}. Baixe o PDF abaixo.`
+    : "Boleto emitido com sucesso! Baixe o PDF abaixo.";
+}
+
+function operationFailureMessage(result: AgentResultView, operation?: OperationSummary): string {
+  if (result.intent === "update_charge_due_date") {
+    return operation?.summary ?? "Não foi possível alterar o vencimento no Asaas.";
+  }
+  if (isDownloadBoletoIntent(result)) {
+    return operation?.summary ?? result.summary ?? "Não foi possível baixar o PDF do boleto.";
+  }
+  return operation?.summary ?? "A emissão falhou. Veja os detalhes abaixo ou no histórico de operações.";
+}
+
+function messageSummary(result: AgentResultView, operation?: OperationSummary): string {
+  if (isLiveSuccess(result, operation)) {
+    return operationSuccessMessage(result, operation);
+  }
+  if (isLiveFailure(result, operation)) {
+    return operationFailureMessage(result, operation);
+  }
+  if (result.receiptStatus === "planned") {
+    if (result.intent === "update_charge_due_date") {
+      return "Dry-run concluído. Revise os dados e aprove para alterar o vencimento e baixar o boleto atualizado.";
+    }
+    if (isDownloadBoletoIntent(result)) {
+      return "PDF do boleto preparado. Abra o arquivo abaixo.";
+    }
+    return "Dry-run concluído. Revise os dados e aprove para emitir o boleto de verdade.";
+  }
+  return result.summary ?? assistantFallback(result);
+}
+
 function statusLabel(
   result: AgentResultView | undefined,
-  phase: PixelynPhase
+  phase: PixelynPhase,
+  operation?: OperationSummary
 ): { label: string; tone: "idle" | "working" | "ready" | "blocked" | "done" } {
   if (phase === "preparing") return { label: "Pensando", tone: "working" };
-  if (phase === "executing") return { label: "Executando", tone: "working" };
+  if (phase === "executing") {
+    if (result?.intent === "update_charge_due_date") {
+      return { label: "Alterando vencimento…", tone: "working" };
+    }
+    if (isDownloadBoletoIntent(result)) {
+      return { label: "Baixando PDF…", tone: "working" };
+    }
+    return { label: "Emitindo boleto…", tone: "working" };
+  }
+  if (operation?.latestStatus === "succeeded" || result?.receiptStatus === "succeeded") {
+    return { label: "Concluído", tone: "done" };
+  }
+  if (operation?.latestStatus === "failed" || result?.receiptStatus === "failed") {
+    return { label: "Falhou", tone: "blocked" };
+  }
   if (!result) return { label: "Em preparo", tone: "idle" };
   if (result.status === "needs_input") return { label: "Aguardando dados", tone: "working" };
+  if (result.receiptStatus === "planned") {
+    if (isDownloadBoletoIntent(result)) {
+      return { label: "PDF pronto", tone: "done" };
+    }
+    return { label: "Aguardando aprovação", tone: "ready" };
+  }
   if (result.status === "planned") return { label: "Pronto para revisão", tone: "ready" };
-  if (result.status === "executed") return { label: "Executado", tone: "done" };
+  if (result.status === "executed") return { label: "Registrado", tone: "done" };
   return { label: "Bloqueado", tone: "blocked" };
 }
 
@@ -182,11 +412,231 @@ function assistantFallback(result: AgentResultView): string {
   if (result.status === "planned") {
     return "Preparei um dry-run para revisão.";
   }
+  if (result.status === "executed" && result.receiptStatus === "planned") {
+    if (result.intent === "update_charge_due_date") {
+      return "Dry-run concluído. Revise os dados e aprove para alterar o vencimento e baixar o boleto atualizado.";
+    }
+    if (isDownloadBoletoIntent(result)) {
+      return "PDF do boleto preparado. Abra o arquivo abaixo.";
+    }
+    return "Dry-run concluído. Revise os dados e aprove para emitir o boleto de verdade.";
+  }
+  if (result.status === "executed" && isDownloadBoletoIntent(result)) {
+    return result.summary ?? "PDF do boleto baixado com sucesso.";
+  }
   if (result.status === "executed") {
     return "Execução registrada.";
   }
+  if (result.status === "blocked") {
+    return result.summary ?? "Não consegui prosseguir com segurança. Escolha uma operação no menu ou descreva o pedido com mais detalhes.";
+  }
   if (result.reason) return result.reason;
   return "Não consegui prosseguir com segurança.";
+}
+
+function DueDateUpdateResultCard(props: {
+  result: AgentResultView;
+  operation?: OperationSummary;
+}): ReactElement | null {
+  if (props.result.intent !== "update_charge_due_date" || !isLiveSuccess(props.result, props.operation)) {
+    return null;
+  }
+
+  const details = resolveDueDateUpdateDetails(props.result, props.operation);
+  if (!details.chargeId && !details.dueDateBr) return null;
+
+  const pdfArtifacts = [
+    ...(props.operation?.artifacts ?? []),
+    ...artifactsFromReceiptData(props.result.receiptData)
+  ].filter((artifact) => artifact.kind === "pdf");
+
+  return (
+    <div className="followup followup--success">
+      <p className="followup__title">
+        <CheckCircle2 aria-hidden="true" size={16} />
+        Alteração registrada no Asaas
+      </p>
+      <dl className="operation-preview__facts operation-preview__facts--inline">
+        {details.customerName ? (
+          <div>
+            <dt>Cliente</dt>
+            <dd>{details.customerName}</dd>
+          </div>
+        ) : null}
+        {details.chargeId ? (
+          <div>
+            <dt>Cobrança</dt>
+            <dd>{details.chargeId}</dd>
+          </div>
+        ) : null}
+        {details.dueDateBr ? (
+          <div>
+            <dt>Novo vencimento</dt>
+            <dd>{details.dueDateBr}</dd>
+          </div>
+        ) : null}
+      </dl>
+      {pdfArtifacts.length > 0 ? (
+        <div className="followup__actions">
+          {pdfArtifacts.map((artifact) => (
+            <button
+              className="pill-btn pill-btn--primary"
+              key={`${artifact.label}-${artifact.path}`}
+              onClick={() => void window.confere?.openPath(artifact.path)}
+              type="button"
+            >
+              <FileText aria-hidden="true" size={16} />
+              {artifact.label || "Abrir PDF do boleto"}
+            </button>
+          ))}
+        </div>
+      ) : (
+        <p className="followup__text">
+          O vencimento foi alterado, mas o PDF ainda não ficou disponível nesta sessão.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function DownloadBoletoResultCard(props: {
+  result: AgentResultView;
+  operation?: OperationSummary;
+}): ReactElement | null {
+  if (!isDownloadBoletoIntent(props.result) || !isLiveSuccess(props.result, props.operation)) {
+    return null;
+  }
+
+  const details = resolveDownloadBoletoDetails(props.result, props.operation);
+  const pdfArtifacts = [
+    ...(props.operation?.artifacts ?? []),
+    ...artifactsFromReceiptData(props.result.receiptData)
+  ].filter((artifact) => artifact.kind === "pdf");
+
+  return (
+    <div className="followup followup--success">
+      <p className="followup__title">
+        <CheckCircle2 aria-hidden="true" size={16} />
+        PDF do boleto disponível
+      </p>
+      <dl className="operation-preview__facts operation-preview__facts--inline">
+        {details.customerName ? (
+          <div>
+            <dt>Cliente</dt>
+            <dd>{details.customerName}</dd>
+          </div>
+        ) : null}
+        {details.chargeId ? (
+          <div>
+            <dt>Cobrança</dt>
+            <dd>{details.chargeId}</dd>
+          </div>
+        ) : null}
+        {details.valueBr ? (
+          <div>
+            <dt>Valor</dt>
+            <dd>{details.valueBr}</dd>
+          </div>
+        ) : null}
+        {details.dueDateBr ? (
+          <div>
+            <dt>Vencimento</dt>
+            <dd>{details.dueDateBr}</dd>
+          </div>
+        ) : null}
+      </dl>
+      {pdfArtifacts.length > 0 ? (
+        <div className="followup__actions">
+          {pdfArtifacts.map((artifact) => (
+            <button
+              className="pill-btn pill-btn--primary"
+              key={`${artifact.label}-${artifact.path}`}
+              onClick={() => void window.confere?.openPath(artifact.path)}
+              type="button"
+            >
+              <FileText aria-hidden="true" size={16} />
+              {artifact.label || "Abrir PDF do boleto"}
+            </button>
+          ))}
+        </div>
+      ) : (
+        <p className="followup__text">
+          O download foi registrado, mas o PDF ainda não ficou disponível nesta sessão.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function OperationArtifactsCard(props: {
+  operation?: OperationSummary;
+  failed?: boolean;
+  receiptData?: unknown;
+  receiptStatus?: string;
+  intent?: string;
+}): ReactElement | null {
+  if (props.receiptStatus === "planned" || props.operation?.latestStatus === "planned") {
+    return null;
+  }
+  if (
+    props.intent === "update_charge_due_date" ||
+    props.intent === "download_boleto" ||
+    props.intent === "download_boleto_pdf"
+  ) {
+    return null;
+  }
+
+  const receiptArtifacts = artifactsFromReceiptData(props.receiptData);
+  const artifacts = props.operation?.artifacts ?? receiptArtifacts;
+  const pdfArtifacts = artifacts.filter((artifact) => artifact.kind === "pdf");
+  if (!props.failed && pdfArtifacts.length === 0) return null;
+
+  return (
+    <div className={`followup ${props.failed ? "followup--danger" : "followup--success"}`}>
+      <p className="followup__title">
+        {props.failed ? (
+          <AlertTriangle aria-hidden="true" size={16} />
+        ) : (
+          <CheckCircle2 aria-hidden="true" size={16} />
+        )}
+        {props.failed ? "A emissão não foi concluída" : "Boleto pronto"}
+      </p>
+      {props.failed && props.operation?.failedStep ? (
+        <p className="followup__text">Etapa com falha: {props.operation.failedStep}</p>
+      ) : null}
+      {props.operation?.chargeUrl ? (
+        <p className="followup__text">
+          Link da fatura:{" "}
+          <a href={props.operation.chargeUrl} rel="noreferrer" target="_blank">
+            abrir no Conta Azul
+          </a>
+        </p>
+      ) : null}
+        {pdfArtifacts.length > 0 ? (
+        <div className="followup__actions artifact-actions">
+          {pdfArtifacts.map((artifact) => (
+            <button
+              className="pill-btn pill-btn--primary"
+              key={`${artifact.label}-${artifact.path}`}
+              onClick={() => void window.confere?.openPath(artifact.path)}
+              type="button"
+            >
+              <FileText aria-hidden="true" size={16} />
+              {artifact.label || "Abrir PDF do boleto"}
+            </button>
+          ))}
+        </div>
+      ) : props.failed ? (
+        <p className="followup__text">Consulte Operações no menu lateral para ver o histórico completo.</p>
+      ) : null}
+    </div>
+  );
+}
+
+function artifactsFromReceiptData(receiptData: unknown): OperationSummary["artifacts"] {
+  if (!receiptData || typeof receiptData !== "object") return [];
+  const artifacts = (receiptData as { artifacts?: OperationSummary["artifacts"] }).artifacts;
+  return Array.isArray(artifacts) ? artifacts : [];
 }
 
 function UserMessage(props: { text: string; timestamp: string }): ReactElement {
@@ -207,7 +657,8 @@ export function AssistantResultMessage(props: {
   onSend: (text: string, params?: Record<string, unknown>) => void;
 }): ReactElement {
   const result = props.message.result;
-  const summary = result.summary ?? assistantFallback(result);
+  const operation = props.message.operation;
+  const summary = messageSummary(result, operation);
   const hasQuestions = result.questions.length > 0;
 
   const isSearchFinancial = result.toolName === "contaazul.search_financial_statement";
@@ -216,6 +667,14 @@ export function AssistantResultMessage(props: {
     : [];
 
   const isCreateCustomer = result.toolName === "contaazul.create_customer_workflow";
+  const choicePicker = inferChoicePicker(result);
+  const inlineForm = inferInlineForm(result);
+  const showInlineForm = props.isLatest && inlineForm !== null;
+  const showChoicePicker =
+    props.isLatest &&
+    !showInlineForm &&
+    choicePicker !== null &&
+    (choicePicker.allowCreate === true || (result.choices?.length ?? 0) > 0);
   const resolvedCustomer = (isCreateCustomer && result.receiptStatus === "succeeded" && result.receiptData && typeof result.receiptData === "object")
     ? (result.receiptData as any).resolved
     : undefined;
@@ -242,7 +701,7 @@ export function AssistantResultMessage(props: {
 
   return (
     <article className="chat-message chat-message--assistant">
-      <PixelynAvatar state={pixelynStateFromResult(result, "idle")} size={42} />
+      <PixelynAvatar context="chat" state={pixelynStateFromResult(result, "idle")} />
       <div className="chat-message__stack">
         <header className="chat-message__meta">
           <strong>Pixelyn</strong>
@@ -250,7 +709,13 @@ export function AssistantResultMessage(props: {
         </header>
         <div className="chat-message__body chat-message__body--assistant">
           <p className="assistant__say">{summary}</p>
-          {hasQuestions ? (
+          {showInlineForm && inlineForm ? (
+            <ChatInlineForm
+              definition={inlineForm}
+              onSubmit={(text, params) => props.onSend(text, params)}
+              result={result}
+            />
+          ) : hasQuestions ? (
             <QuestionChecklist
               questions={result.questions}
               missingFields={result.missingFields}
@@ -267,43 +732,44 @@ export function AssistantResultMessage(props: {
             </div>
           ) : null}
 
-          {result.choices && result.choices.length > 0 ? (
-            <div className="choice-actions" aria-label="Escolhas disponíveis">
-              {result.choices.map((choice) => (
-                <button
-                  className="choice-action"
-                  key={choice.id}
-                  onClick={() => props.onSend(choice.request ?? choice.label, choice.params)}
-                  type="button"
-                >
-                  <span>{choice.label}</span>
-                  {choice.description ? <small>{choice.description}</small> : null}
-                </button>
-              ))}
-            </div>
+          {showChoicePicker && choicePicker ? (
+            choicePicker.display === "select" ? (
+              <ChoiceSelectList
+                choices={result.choices ?? []}
+                onSelect={(choice) => props.onSend(choice.request ?? choice.label, choice.params)}
+              />
+            ) : (
+              <ChoiceSearchPicker
+                choices={result.choices}
+                config={choicePicker}
+                onCreateNew={
+                  choicePicker.allowCreate
+                    ? (query) =>
+                        props.onSend(`Criar cliente ${query}`, {
+                          __interactive: {
+                            flow: "contaazul_service_sale_boleto",
+                            action: "start_create_customer"
+                          },
+                          suggestedName: query
+                        })
+                    : undefined
+                }
+                onSelect={(choice) => props.onSend(choice.request ?? choice.label, choice.params)}
+              />
+            )
           ) : null}
 
           {/* Candidates / Ambiguity choice chips */}
           {result.candidates && result.candidates.length > 0 ? (
-            <div className="candidates-container" style={{ marginTop: "12px" }}>
-              <p style={{ fontWeight: 600, fontSize: "0.9em", marginBottom: "8px" }}>
+            <div className="candidates">
+              <p className="candidates__label">
                 Múltiplas opções para {formatField(result.fieldName || "")}:
               </p>
-              <div className="candidates-chips" style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+              <div className="candidates__chips">
                 {result.candidates.map((candidate) => (
                   <button
                     key={candidate}
-                    className="composer-chip"
-                    style={{
-                      cursor: "pointer",
-                      padding: "6px 12px",
-                      borderRadius: "6px",
-                      border: "1px solid var(--border-color, #e0e0e0)",
-                      backgroundColor: "var(--bg-card, #f5f5f5)",
-                      color: "var(--text-color, #333)",
-                      fontSize: "0.85em",
-                      fontWeight: 500
-                    }}
+                    className="candidate-chip"
                     onClick={() => props.onSend(candidate)}
                     type="button"
                   >
@@ -316,101 +782,71 @@ export function AssistantResultMessage(props: {
 
           {/* Financial Statement Extrato Table */}
           {financialItems.length > 0 ? (
-            <div className="extrato-container" style={{ marginTop: "16px", overflowX: "auto" }}>
-              <table className="extrato-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85em", textAlign: "left" }}>
-                <thead>
-                  <tr style={{ borderBottom: "2px solid #ddd", color: "#666" }}>
-                    <th style={{ padding: "8px" }}>Vencimento</th>
-                    <th style={{ padding: "8px" }}>Cliente</th>
-                    <th style={{ padding: "8px" }}>Descrição</th>
-                    <th style={{ padding: "8px" }}>Valor</th>
-                    <th style={{ padding: "8px" }}>Status</th>
-                    <th style={{ padding: "8px" }}>Ações</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {financialItems.map((item: any) => (
-                    <tr key={item.id} style={{ borderBottom: "1px solid #eee" }}>
-                      <td style={{ padding: "8px" }}>{formatDate(item.dueDateIso) || "--"}</td>
-                      <td style={{ padding: "8px" }}>{item.customerName || "--"}</td>
-                      <td style={{ padding: "8px" }}>{item.description || "--"}</td>
-                      <td style={{ padding: "8px" }}>{formatMoney(item.value) || "--"}</td>
-                      <td style={{ padding: "8px" }}>
-                        <span style={{
-                          padding: "2px 6px",
-                          borderRadius: "4px",
-                          fontSize: "0.8em",
-                          backgroundColor: item.status === "PAID" || item.status === "ACQUITTED" ? "#e6f4ea" : "#fce8e6",
-                          color: item.status === "PAID" || item.status === "ACQUITTED" ? "#137333" : "#c5221f"
-                        }}>
-                          {item.status === "PAID" || item.status === "ACQUITTED" ? "Pago" : "Pendente"}
-                        </span>
-                      </td>
-                      <td style={{ padding: "8px" }}>
-                        <button
-                          className="composer-chip"
-                          style={{
-                            cursor: "pointer",
-                            padding: "4px 8px",
-                            borderRadius: "4px",
-                            border: "1px solid #1a73e8",
-                            backgroundColor: "transparent",
-                            color: "#1a73e8",
-                            fontSize: "0.9em",
-                            fontWeight: 500
-                          }}
-                          onClick={() => handleUpdateDueDate(item)}
-                          type="button"
-                        >
-                          Alterar Vencimento
-                        </button>
-                      </td>
+            <div className="extrato">
+              <div className="extrato__scroll">
+                <table className="extrato__table">
+                  <thead>
+                    <tr>
+                      <th>Vencimento</th>
+                      <th>Cliente</th>
+                      <th>Descrição</th>
+                      <th>Valor</th>
+                      <th>Status</th>
+                      <th>Ações</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {financialItems.map((item: any) => {
+                      const paid = item.status === "PAID" || item.status === "ACQUITTED";
+                      return (
+                        <tr key={item.id}>
+                          <td>{formatDate(item.dueDateIso) || "--"}</td>
+                          <td>{item.customerName || "--"}</td>
+                          <td>{item.description || "--"}</td>
+                          <td>{formatMoney(item.value) || "--"}</td>
+                          <td>
+                            <span className={`data-pill ${paid ? "data-pill--paid" : "data-pill--pending"}`}>
+                              {paid ? "Pago" : "Pendente"}
+                            </span>
+                          </td>
+                          <td>
+                            <button
+                              className="data-action"
+                              onClick={() => handleUpdateDueDate(item)}
+                              type="button"
+                            >
+                              Alterar vencimento
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
             </div>
           ) : null}
 
           {/* Customer Created Followup */}
           {resolvedCustomer ? (
-            <div className="followup-container" style={{ marginTop: "16px", padding: "12px", border: "1px solid #1a73e8", borderRadius: "8px", backgroundColor: "#f8faff" }}>
-              <p style={{ fontWeight: 600, color: "#1a73e8", marginBottom: "8px" }}>
+            <div className="followup">
+              <p className="followup__title">
+                <CheckCircle2 aria-hidden="true" size={16} />
                 Cadastro concluído com sucesso para "{resolvedCustomer.customerName}".
               </p>
-              <p style={{ fontSize: "0.9em", marginBottom: "12px" }}>
+              <p className="followup__text">
                 Deseja emitir um novo boleto de serviço para este cliente agora?
               </p>
-              <div style={{ display: "flex", gap: "8px" }}>
+              <div className="followup__actions">
                 <button
-                  className="composer-chip"
-                  style={{
-                    cursor: "pointer",
-                    padding: "6px 12px",
-                    borderRadius: "6px",
-                    border: "1px solid #1a73e8",
-                    backgroundColor: "#1a73e8",
-                    color: "#fff",
-                    fontSize: "0.85em",
-                    fontWeight: 500
-                  }}
+                  className="pill-btn pill-btn--primary"
                   onClick={() => props.onSend("Emitir boleto de serviço", buildBoletoHandoffParams(resolvedCustomer))}
                   type="button"
                 >
                   Sim, emitir boleto
                 </button>
                 <button
-                  className="composer-chip"
-                  style={{
-                    cursor: "pointer",
-                    padding: "6px 12px",
-                    borderRadius: "6px",
-                    border: "1px solid #ccc",
-                    backgroundColor: "#fff",
-                    color: "#666",
-                    fontSize: "0.85em",
-                    fontWeight: 500
-                  }}
+                  className="pill-btn pill-btn--ghost"
                   onClick={() => props.onSend("Não, obrigado")}
                   type="button"
                 >
@@ -420,7 +856,7 @@ export function AssistantResultMessage(props: {
             </div>
           ) : null}
 
-          {props.message.draftOperationId ? (
+          {props.message.draftOperationId && result.receiptStatus === "planned" ? (
             <PlanCard
               approvalAvailable={result.approvalAvailable}
               facts={factsFromOperation(props.message.operation, result)}
@@ -430,7 +866,17 @@ export function AssistantResultMessage(props: {
               }
             />
           ) : null}
-          {hasQuestions ? (
+
+          <OperationArtifactsCard
+            failed={isLiveFailure(result, operation)}
+            intent={result.intent}
+            operation={operation}
+            receiptData={result.receiptData}
+            receiptStatus={result.receiptStatus}
+          />
+          <DueDateUpdateResultCard operation={operation} result={result} />
+          <DownloadBoletoResultCard operation={operation} result={result} />
+          {hasQuestions && !showInlineForm ? (
             <p className="assistant__hint">Você pode responder os campos em qualquer ordem.</p>
           ) : null}
         </div>
@@ -478,9 +924,9 @@ function QuestionChecklist(props: {
       {props.questions.map((question, index) => {
         const fieldName = props.missingFields[index] ?? `Campo ${index + 1}`;
         return (
-          <div className="question-list__item" key={fieldName} style={{ display: "flex", width: "100%", alignItems: "center", gap: "10px" }}>
+          <div className="question-list__item" key={fieldName}>
             <span className="question-list__index">{index + 1}</span>
-            <div style={{ flex: 1 }}>
+            <div className="question-list__body">
               <strong>{formatField(fieldName)}</strong>
               <p>{getFriendlyQuestion(fieldName, question)}</p>
             </div>
@@ -495,7 +941,7 @@ function QuestionChecklist(props: {
 function TypingIndicator(): ReactElement {
   return (
     <article className="chat-message chat-message--assistant chat-message--typing">
-      <PixelynAvatar state="pensando" size={42} />
+      <PixelynAvatar context="chat" state="pensando" />
       <div className="typing-pill">
         <Loader2 aria-hidden="true" size={15} />
         Pixelyn está preparando...
@@ -515,8 +961,64 @@ function OperationContextPanel(props: {
   draftOperationId: string | undefined;
   phase: PixelynPhase;
 }): ReactElement {
-  const status = statusLabel(props.result, props.phase);
+  const status = statusLabel(props.result, props.phase, props.operation);
   const suggested = moduleSuggestion(props.result);
+  const liveDone = isLiveSuccess(props.result, props.operation);
+  const liveFailed = isLiveFailure(props.result, props.operation);
+  const pdfArtifacts = liveDone
+    ? [
+        ...(props.operation?.artifacts ?? []),
+        ...artifactsFromReceiptData(props.result?.receiptData)
+      ].filter((artifact) => artifact.kind === "pdf")
+    : [];
+  const isDueDateUpdate = props.result?.intent === "update_charge_due_date";
+  const isDownloadBoleto = isDownloadBoletoIntent(props.result);
+  const dueDateDetails = props.result
+    ? resolveDueDateUpdateDetails(props.result, props.operation)
+    : undefined;
+  const downloadDetails = props.result
+    ? resolveDownloadBoletoDetails(props.result, props.operation)
+    : undefined;
+  const previewTitle = isDueDateUpdate
+    ? "Alterar vencimento"
+    : isDownloadBoleto
+      ? "Baixar boleto"
+      : props.result?.toolName?.includes("contaazul")
+        ? "Venda + boleto"
+        : "Boleto avulso";
+  const liveDoneMessage = isDueDateUpdate
+    ? pdfArtifacts.length > 0
+      ? "O vencimento foi atualizado e o PDF do boleto foi baixado."
+      : "O vencimento foi atualizado no Asaas."
+    : isDownloadBoleto
+      ? "O PDF do boleto foi baixado do Asaas."
+      : suggested === "asaas"
+        ? "O boleto foi registrado no Asaas."
+        : "A venda e o boleto foram registrados no Conta Azul.";
+  const panelHeading = liveDone
+    ? isDueDateUpdate
+      ? "Alteração concluída"
+      : isDownloadBoleto
+        ? "Download concluído"
+        : "Operação concluída"
+    : liveFailed
+      ? "Operação com falha"
+      : isDownloadBoleto
+        ? "Baixar boleto"
+        : "Operação em preparo";
+  const panelSubtitle = liveDone
+    ? isDueDateUpdate
+      ? pdfArtifacts.length > 0
+        ? "O vencimento foi atualizado e o PDF está disponível."
+        : "O vencimento da cobrança foi atualizado."
+      : isDownloadBoleto
+        ? "O PDF está disponível para abrir ou salvar."
+        : "O boleto foi emitido e o PDF está disponível."
+    : liveFailed
+      ? "Revise o histórico para entender o que falhou."
+      : isDownloadBoleto
+        ? "Selecione a cobrança e baixe a segunda via em PDF."
+        : "Rascunho seguro antes de qualquer execução real.";
   const pendingFields = props.result?.missingFields.length
     ? props.result.missingFields.map(formatField)
     : props.result
@@ -527,10 +1029,12 @@ function OperationContextPanel(props: {
     <aside className="operation-panel">
       <header className="operation-panel__header">
         <div>
-          <h2>Operação em preparo</h2>
-          <p>Rascunho seguro antes de qualquer execução real.</p>
+          <h2>{panelHeading}</h2>
+          <p>{panelSubtitle}</p>
         </div>
-        <Sparkles aria-hidden="true" size={18} />
+        <span className="operation-panel__spark" aria-hidden="true">
+          <Sparkles size={18} />
+        </span>
       </header>
 
       <section className="operation-panel__section">
@@ -594,37 +1098,106 @@ function OperationContextPanel(props: {
       <section className="security-card">
         <ShieldCheck aria-hidden="true" size={19} />
         <div>
-          <strong>Gate de segurança</strong>
-          <p>Dry-run primeiro. A execução real continua exigindo confirmação final.</p>
+          <strong>
+            {liveDone
+              ? isDueDateUpdate
+                ? "Alteração concluída"
+                : isDownloadBoleto
+                  ? "Download concluído"
+                  : "Emissão concluída"
+              : isDownloadBoleto
+                ? "Consulta ao Asaas"
+                : "Gate de segurança"}
+          </strong>
+          <p>
+            {liveDone
+              ? liveDoneMessage
+              : isDownloadBoleto
+                ? "Download de PDF é somente leitura — não altera cobranças no Asaas."
+                : "Dry-run primeiro. A execução real continua exigindo confirmação final."}
+          </p>
         </div>
-        <span>Protegido</span>
+        <span>{liveDone ? "Concluído" : "Protegido"}</span>
       </section>
+
+      {pdfArtifacts.length > 0 ? (
+        <section className="operation-panel__section">
+          <h3>Arquivos gerados</h3>
+          <div className="artifact-actions">
+            {pdfArtifacts.map((artifact: Artifact) => (
+              <button
+                className="pill-btn pill-btn--primary"
+                key={`${artifact.label}-${artifact.path}`}
+                onClick={() => void window.confere?.openPath(artifact.path)}
+                type="button"
+              >
+                <FileText aria-hidden="true" size={16} />
+                {artifact.label || "Abrir PDF"}
+              </button>
+            ))}
+          </div>
+        </section>
+      ) : null}
 
       <section className="operation-preview">
         <h3>Prévia da operação</h3>
         <div className="operation-preview__body">
           <ClipboardList aria-hidden="true" size={22} />
           <div>
-            <strong>{props.result?.toolName?.includes("contaazul") ? "Venda + boleto" : "Boleto avulso"}</strong>
+            <strong>{previewTitle}</strong>
             <p>{suggested === "contaazul" ? "Conta Azul" : suggested === "asaas" ? "Asaas" : "Aguardando módulo"}</p>
           </div>
         </div>
         <dl className="operation-preview__facts">
           <div>
             <dt>Cliente</dt>
-            <dd>{props.operation?.customerName ?? "--"}</dd>
+            <dd>{dueDateDetails?.customerName ?? props.operation?.customerName ?? "--"}</dd>
           </div>
+          {isDueDateUpdate || isDownloadBoleto ? (
+            <div>
+              <dt>Cobrança</dt>
+              <dd>
+                {isDownloadBoleto
+                  ? downloadDetails?.chargeId ?? props.operation?.chargeId ?? "--"
+                  : dueDateDetails?.chargeId ?? props.operation?.chargeId ?? "--"}
+              </dd>
+            </div>
+          ) : (
+            <div>
+              <dt>Valor</dt>
+              <dd>{formatMoney(props.operation?.unitValue) ?? "R$ --,--"}</dd>
+            </div>
+          )}
+          {isDownloadBoleto ? (
+            <div>
+              <dt>Valor</dt>
+              <dd>{downloadDetails?.valueBr ?? "R$ --,--"}</dd>
+            </div>
+          ) : null}
           <div>
-            <dt>Valor</dt>
-            <dd>{formatMoney(props.operation?.unitValue) ?? "R$ --,--"}</dd>
-          </div>
-          <div>
-            <dt>Vencimento</dt>
-            <dd>{formatDate(props.operation?.dueDateIso) ?? "--/--/----"}</dd>
+            <dt>{isDueDateUpdate ? "Novo vencimento" : "Vencimento"}</dt>
+            <dd>
+              {isDownloadBoleto
+                ? downloadDetails?.dueDateBr ?? "--/--/----"
+                : formatDate(props.operation?.dueDateIso) ??
+                  dueDateDetails?.dueDateBr ??
+                  "--/--/----"}
+            </dd>
           </div>
         </dl>
       </section>
     </aside>
+  );
+}
+
+function isSilentInteractiveTurn(
+  customText: string | undefined,
+  customParams: Record<string, unknown> | undefined
+): boolean {
+  return (
+    customText !== undefined &&
+    customText.trim() === "" &&
+    Boolean(customParams?.__interactive && typeof customParams.__interactive === "object")
   );
 }
 
@@ -668,20 +1241,23 @@ export function AssistantScreen(props: {
   }
 
   async function prepare(customText?: string, customParams?: Record<string, unknown>): Promise<void> {
+    const silentInteractive = isSilentInteractiveTurn(customText, customParams);
     const content = (customText !== undefined ? customText : request).trim();
-    if (!content || phase !== "idle") return;
+    if ((!content && !silentInteractive) || phase !== "idle") return;
 
-    setMessages((current) => [
-      ...current,
-      {
-        id: createMessageId("user"),
-        role: "user",
-        text: content,
-        timestamp: timeLabel()
+    if (!silentInteractive) {
+      setMessages((current) => [
+        ...current,
+        {
+          id: createMessageId("user"),
+          role: "user",
+          text: content,
+          timestamp: timeLabel()
+        }
+      ]);
+      if (customText === undefined) {
+        setRequest("");
       }
-    ]);
-    if (customText === undefined) {
-      setRequest("");
     }
     setPhase("preparing");
     setError(undefined);
@@ -695,22 +1271,47 @@ export function AssistantScreen(props: {
       if (response.draftOperationId) {
         const summary = await getOperation(response.draftOperationId);
         nextOperation = summary.operation;
+      } else if (response.result.operationId) {
+        try {
+          const summary = await getOperation(response.result.operationId);
+          nextOperation = summary.operation;
+        } catch {
+          nextOperation = undefined;
+        }
       }
 
       setResult(response.result);
       setDraftOperationId(response.draftOperationId);
       setOperation(nextOperation);
-      setMessages((current) => [
-        ...current,
-        {
-          id: createMessageId("assistant"),
-          role: "assistant",
-          result: response.result,
-          operation: nextOperation,
-          draftOperationId: response.draftOperationId,
-          timestamp: timeLabel()
+      setMessages((current) => {
+        if (silentInteractive) {
+          for (let index = current.length - 1; index >= 0; index -= 1) {
+            const message = current[index];
+            if (message.role !== "assistant") continue;
+            const next = [...current];
+            next[index] = {
+              ...message,
+              result: response.result,
+              operation: nextOperation,
+              draftOperationId: response.draftOperationId,
+              timestamp: timeLabel()
+            };
+            return next;
+          }
         }
-      ]);
+
+        return [
+          ...current,
+          {
+            id: createMessageId("assistant"),
+            role: "assistant",
+            result: response.result,
+            operation: nextOperation,
+            draftOperationId: response.draftOperationId,
+            timestamp: timeLabel()
+          }
+        ];
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Falha ao preparar operação.");
     } finally {
@@ -719,10 +1320,27 @@ export function AssistantScreen(props: {
   }
 
   function handleComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>): void {
-    if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+    if (event.key !== "Enter") return;
+
+    // Ctrl/Cmd+Enter (e Shift+Enter) inserem quebra de linha; Enter sozinho envia.
+    if (event.ctrlKey || event.metaKey) {
       event.preventDefault();
-      void prepare();
+      const target = event.currentTarget;
+      const start = target.selectionStart ?? target.value.length;
+      const end = target.selectionEnd ?? target.value.length;
+      const next = `${target.value.slice(0, start)}\n${target.value.slice(end)}`;
+      setRequest(next);
+      requestAnimationFrame(() => {
+        target.selectionStart = start + 1;
+        target.selectionEnd = start + 1;
+      });
+      return;
     }
+
+    if (event.shiftKey) return;
+
+    event.preventDefault();
+    void prepare();
   }
 
   async function reviewExecution(operationId: string): Promise<void> {
@@ -752,9 +1370,30 @@ export function AssistantScreen(props: {
         return;
       }
 
+      const success = executed.receiptStatus === "succeeded";
+      const failed = executed.receiptStatus === "failed";
+      const nextResult = { ...result!, receiptStatus: executed.receiptStatus };
+      const nextSummary = success
+        ? operationSuccessMessage(nextResult, executed.operation)
+        : failed
+          ? operationFailureMessage(nextResult, executed.operation)
+          : messageSummary(nextResult, executed.operation);
+
+      if (failed) {
+        setError(operationFailureMessage(nextResult, executed.operation));
+      }
+
       setOperation(executed.operation);
       setResult((previous) =>
-        previous ? { ...previous, status: "executed", receiptStatus: executed.receiptStatus } : previous
+        previous
+          ? {
+              ...previous,
+              status: "executed",
+              receiptStatus: executed.receiptStatus,
+              summary: nextSummary,
+              warnings: [...previous.warnings, ...executed.warnings]
+            }
+          : previous
       );
       setMessages((current) =>
         current.map((message) =>
@@ -764,7 +1403,9 @@ export function AssistantScreen(props: {
                 result: {
                   ...message.result,
                   status: "executed",
-                  receiptStatus: executed.receiptStatus
+                  receiptStatus: executed.receiptStatus,
+                  summary: nextSummary,
+                  warnings: [...message.result.warnings, ...executed.warnings]
                 },
                 operation: executed.operation,
                 draftOperationId: undefined
@@ -798,23 +1439,38 @@ export function AssistantScreen(props: {
         <div className="assistant__thread" ref={threadRef}>
           {messages.length === 0 ? (
             <div className="assistant__greeting">
-              <PixelynAvatar state={pixelynState} size={72} />
-              <div>
+              <div className="assistant__greeting-avatar">
+                <PixelynAvatar context="greeting" state={pixelynState} />
+              </div>
+              <div className="assistant__greeting-copy">
                 <h1>E aí, o que vamos resolver hoje?</h1>
-                <p>Descreva a cobrança, a venda ou o boleto que eu preparo o rascunho.</p>
-                <div className="assistant__starter-grid">
-                  {ANCHORED_OPERATIONS.map((op) => (
+                <p>
+                  Descreva a cobrança, a venda ou o boleto que eu preparo o rascunho —
+                  ou comece por um atalho abaixo.
+                </p>
+              </div>
+              <div className="assistant__starter-grid">
+                {ANCHORED_OPERATIONS.map((op) => {
+                  const Icon = op.icon;
+                  return (
                     <button
+                      className="starter-card"
                       key={op.action}
                       onClick={() =>
                         void prepare(op.label, { __interactive: { flow: "anchor", action: op.action } })
                       }
                       type="button"
                     >
-                      {op.label}
+                      <span className="starter-card__icon" aria-hidden="true">
+                        <Icon size={20} />
+                      </span>
+                      <span className="starter-card__text">
+                        <span className="starter-card__title">{op.label}</span>
+                        <span className="starter-card__hint">{op.hint}</span>
+                      </span>
                     </button>
-                  ))}
-                </div>
+                  );
+                })}
               </div>
             </div>
           ) : null}
@@ -849,21 +1505,13 @@ export function AssistantScreen(props: {
           />
           <div className="composer-toolbar">
             <div className="composer-toolbar__left">
-              <button className="composer-chip" type="button">
-                <Paperclip aria-hidden="true" size={14} />
-                Anexar
-              </button>
-              <button
-                className="composer-chip"
-                onClick={() => setRequest(ANCHORED_OPERATIONS[0]!.label)}
-                type="button"
-              >
-                /
-                Atalhos
-              </button>
+              <span className="composer-shortcut">
+                <CornerDownLeft aria-hidden="true" size={12} />
+                Enter envia
+              </span>
               <span className="composer-shortcut">
                 <Command aria-hidden="true" size={12} />
-                Ctrl + Enter
+                Ctrl + Enter quebra linha
               </span>
             </div>
             <button

@@ -1,11 +1,16 @@
 import type {
   AgentTurnApiRequest,
   AgentTurnApiResponse,
+  CheckConnectionsApiResponse,
   ConfirmationSheetApiResponse,
   ConfereStatus,
+  ConnectionHealth,
   ExecuteOperationApiResponse,
   OperationListApiResponse,
-  OperationSummaryApiResponse
+  OperationSummaryApiResponse,
+  RenewEvent,
+  RenewProvider,
+  RenewStartApiResponse
 } from "../server/api-types.js";
 
 let cachedBaseUrl: string | undefined;
@@ -19,6 +24,51 @@ export async function getApiBaseUrl(): Promise<string> {
 export async function getStatus(): Promise<ConfereStatus> {
   if (window.confere) return window.confere.getStatus();
   return getJson("/api/status");
+}
+
+// Fora do shell do Electron (preview no navegador) não há checagem real de
+// sessão; mostramos "missing" para exercitar o onboarding visualmente.
+const PREVIEW_CONNECTIONS: ConnectionHealth[] = [
+  {
+    provider: "asaas",
+    label: "Asaas",
+    status: "missing",
+    detail: "Pré-visualização sem backend.",
+    checkedAt: new Date().toISOString(),
+    recaptureCommand: "node renew-session.cjs asaas"
+  },
+  {
+    provider: "contaazul",
+    label: "Conta Azul",
+    status: "missing",
+    detail: "Pré-visualização sem backend.",
+    checkedAt: new Date().toISOString(),
+    recaptureCommand: "node renew-session.cjs contaazul"
+  }
+];
+
+export async function checkConnections(): Promise<ConnectionHealth[]> {
+  if (window.confere) {
+    const response = await window.confere.checkConnections();
+    return response.connections;
+  }
+  return PREVIEW_CONNECTIONS;
+}
+
+export async function renewConnection(provider: RenewProvider): Promise<RenewStartApiResponse> {
+  if (window.confere) return window.confere.renewConnection(provider);
+  return { status: "unavailable", reason: "Renovação disponível apenas no app desktop." };
+}
+
+export async function confirmRenew(provider: RenewProvider): Promise<void> {
+  if (window.confere) {
+    await window.confere.confirmRenew(provider);
+  }
+}
+
+export function onRenewEvent(callback: (event: RenewEvent) => void): () => void {
+  if (window.confere) return window.confere.onRenewEvent(callback);
+  return () => undefined;
 }
 
 export async function runAgentTurn(input: AgentTurnApiRequest): Promise<AgentTurnApiResponse> {

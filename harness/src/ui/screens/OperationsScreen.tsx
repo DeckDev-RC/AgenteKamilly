@@ -1,4 +1,4 @@
-import { ExternalLink, FileText, RefreshCcw } from "lucide-react";
+import { ExternalLink, FileText, Hash, Inbox, RefreshCcw } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { ReactElement } from "react";
 
@@ -40,23 +40,47 @@ export function OperationsScreen(): ReactElement {
           <ActionButton icon={RefreshCcw} onClick={() => void refresh()}>Atualizar</ActionButton>
         </div>
         {error ? <div className="notice notice--danger">{error}</div> : null}
-        <div className="operations-table">
-          {operations.map((operation) => (
-            <button
-              className="operation-row"
-              key={operation.operationId}
-              onClick={() => setSelected(operation)}
-              type="button"
-            >
-              <span>{operation.operationId}</span>
-              <StatusPill tone={toneForStatus(operation.latestStatus)}>
-                {operation.latestStatus ?? "unknown"}
-              </StatusPill>
-              <span>{operation.customerName ?? operation.toolName ?? "sem resumo"}</span>
-              <span>{operation.latestTimestamp ?? ""}</span>
-            </button>
-          ))}
-        </div>
+        {operations.length === 0 ? (
+          <div className="operations-empty">
+            <Inbox aria-hidden="true" size={34} />
+            <strong>Nenhuma operação registrada</strong>
+            <p>
+              Quando você preparar e executar uma cobrança na Conversa, o histórico
+              auditável aparece aqui.
+            </p>
+          </div>
+        ) : (
+          <div className="operations-table">
+            <div className="operations-table__head">
+              <span>Operação</span>
+              <span>Status</span>
+              <span>Resumo</span>
+              <span>Atualizado</span>
+            </div>
+            {operations.map((operation) => (
+              <button
+                className={`operation-row ${
+                  selected?.operationId === operation.operationId ? "operation-row--active" : ""
+                }`}
+                key={operation.operationId}
+                onClick={() => setSelected(operation)}
+                type="button"
+              >
+                <span className="operation-row__id">
+                  <Hash aria-hidden="true" size={14} />
+                  <code>{operation.operationId}</code>
+                </span>
+                <StatusPill tone={toneForStatus(operation.latestStatus)}>
+                  {operation.latestStatus ?? "unknown"}
+                </StatusPill>
+                <span className="operation-row__summary">
+                  {operation.customerName ?? operation.toolName ?? "sem resumo"}
+                </span>
+                <span className="operation-row__time">{operation.latestTimestamp ?? "—"}</span>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
       <div>
         <OperationSummaryPanel operation={selected} />

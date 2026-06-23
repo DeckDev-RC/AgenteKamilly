@@ -79,10 +79,18 @@ export function ConfirmationSheet(props: {
             ))}
           </div>
         ) : null}
+        {props.busy ? (
+          <div className="confirmation-sheet__progress">
+            <p>
+              Emitindo venda e aguardando o boleto no Conta Azul. Isso pode levar até 2 minutos —
+              não feche esta janela.
+            </p>
+          </div>
+        ) : null}
         <footer className="confirmation-actions">
           <ActionButton disabled={props.busy} onClick={props.onCancel}>Cancelar</ActionButton>
           <ActionButton disabled={props.busy} onClick={props.onConfirm} variant="danger">
-            Aprovar execução real
+            {props.busy ? "Emitindo boleto…" : "Aprovar execução real"}
           </ActionButton>
         </footer>
       </section>
