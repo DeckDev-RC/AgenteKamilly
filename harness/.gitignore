@@ -5,6 +5,8 @@ artifacts/
 downloads/
 *.pdf
 *.png
+# Exceção: sprites do mascote Pixelyn usados pela UI precisam ser versionados.
+!src/ui/assets/pixelyn/*.png
 *.log
 captured_*.json
 node_modules/

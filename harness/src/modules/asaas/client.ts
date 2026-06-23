@@ -2,9 +2,11 @@ import { readFileSync } from "node:fs";
 
 import { parse } from "dotenv";
 
-import { requestWithRetry } from "../../core/http-client.js";
+import { RECAPTURE_COMMANDS } from "../../core/recapture-commands.js";
+import { looksLikeHtml, requestWithRetry, SessionExpiredError } from "../../core/http-client.js";
 
 const ASAAS_BASE_URL = "https://www.asaas.com";
+const ASAAS_RECAPTURE = RECAPTURE_COMMANDS.asaas;
 
 export type AsaasSessionClient = {
   listCustomersPage(offset?: number, max?: number): Promise<string>;
@@ -167,11 +169,38 @@ export function loadAsaasCookieString(envPath: string): string {
 }
 
 async function readJsonContent(response: Response, label: string): Promise<string> {
+  if (response.status === 401 || response.status === 403) {
+    throw new SessionExpiredError(
+      "asaas",
+      `Sessão do Asaas rejeitada (HTTP ${response.status}).`,
+      ASAAS_RECAPTURE
+    );
+  }
   if (!response.ok) {
     throw new Error(`Asaas ${label} request failed with HTTP ${response.status}.`);
   }
 
-  const json = (await response.json()) as { content?: unknown };
+  // Sessão expirada costuma vir como 200 + HTML de login: tratamos como expiração
+  // limpa em vez de deixar JSON.parse estourar com "Unexpected token '<'".
+  const text = await response.text();
+  if (looksLikeHtml(response.headers.get("content-type"), text)) {
+    throw new SessionExpiredError(
+      "asaas",
+      "Sessão do Asaas expirada (o provedor devolveu uma página de login).",
+      ASAAS_RECAPTURE
+    );
+  }
+
+  let json: { content?: unknown };
+  try {
+    json = JSON.parse(text) as { content?: unknown };
+  } catch {
+    throw new SessionExpiredError(
+      "asaas",
+      "Resposta inesperada do Asaas (não-JSON); a sessão pode ter expirado.",
+      ASAAS_RECAPTURE
+    );
+  }
   return typeof json.content === "string" ? json.content : "";
 }
 

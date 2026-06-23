@@ -9,6 +9,7 @@ import {
   AsaasDownloadBoletoPdfParamsSchema,
   AsaasGetChargeLinksParamsSchema,
   AsaasListPendingChargesParamsSchema,
+  AsaasListChargesParamsSchema,
   AsaasSearchCustomersParamsSchema,
   AsaasUpdateChargeDueDateParamsSchema
 } from "../modules/asaas/tools.js";
@@ -88,6 +89,13 @@ export function registerHarnessTools(registry: ToolRegistry, toolset: HarnessToo
     "asaas.list_pending_charges",
     "List pending Asaas charges through mapped session HTTP.",
     AsaasListPendingChargesParamsSchema
+  );
+  registerIfPresent(
+    registry,
+    toolset.asaasRead?.listCharges,
+    "asaas.list_charges",
+    "List Asaas charges (all statuses or pending only) through mapped session HTTP.",
+    AsaasListChargesParamsSchema
   );
   registerIfPresent(
     registry,

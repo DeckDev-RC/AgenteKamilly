@@ -73,7 +73,7 @@ describe("confere service", () => {
     });
 
     const response = await service.runAgentTurn({
-      request: "criar boleto no Asaas",
+      request: "prosseguir com a operação solicitada",
       sessionId: "sess_demo"
     });
 
@@ -171,34 +171,20 @@ describe("confere service", () => {
         customerName: "AZUOS ASSESSORIA CONTÁBIL LTDA"
       }
     });
-    await service.runAgentTurn({ request: "Honorário contábil mensal", sessionId });
-    await service.runAgentTurn({
-      request: "Honorário contábil mensal",
-      sessionId,
-      params: {
-        __interactive: { flow: "contaazul_service_sale_boleto", action: "select_category" },
-        categoryId: "cat_1",
-        categoryName: "Honorário contábil mensal"
-      }
-    });
-    await service.runAgentTurn({ request: "Honorário Contábil", sessionId });
-    await service.runAgentTurn({
-      request: "Honorário Contábil",
-      sessionId,
-      params: {
-        __interactive: { flow: "contaazul_service_sale_boleto", action: "select_item" },
-        itemId: "item_1",
-        itemName: "Honorário Contábil"
-      }
-    });
-    await service.runAgentTurn({ request: "Honorário mensal", sessionId });
-    await service.runAgentTurn({ request: "10,00", sessionId });
-    await service.runAgentTurn({ request: "30/06/2026", sessionId });
-    await service.runAgentTurn({ request: "62991514384", sessionId });
-    await service.runAgentTurn({ request: "kamilly.agregarnegocios@gmail.com", sessionId });
     const response = await service.runAgentTurn({
-      request: "sccontabilidadefinanceiro@gmail.com",
-      sessionId
+      request: "Preparar cobrança",
+      sessionId,
+      params: {
+        __interactive: { flow: "contaazul_service_sale_boleto", action: "submit_sale_details" },
+        categoryId: "cat_1",
+        itemId: "item_1",
+        serviceDescription: "Honorário mensal",
+        unitValueBr: "10,00",
+        dueDateBr: "30/06/2026",
+        "notification.phone": "62991514384",
+        "notification.email": "kamilly.agregarnegocios@gmail.com",
+        "notification.replyTo": "sccontabilidadefinanceiro@gmail.com"
+      }
     });
 
     expect(provider.calls).toEqual([]);
@@ -414,6 +400,55 @@ describe("confere service", () => {
     ]);
   });
 
+  it("normalizes legacy Asaas update drafts that stored chargeIds instead of chargeId", async () => {
+    const calls: unknown[] = [];
+    const registry = createToolRegistry();
+    registry.register({
+      name: "asaas.update_charge_due_date",
+      description: "update due date",
+      parameters: z.object({
+        operationId: z.string().optional(),
+        approvalText: z.string().optional(),
+        chargeId: z.string(),
+        dueDateBr: z.string()
+      }),
+      execute: async (params) => {
+        calls.push(params);
+        return {
+          ...plannedReceipt("asaas.update_charge_due_date", "op_legacy"),
+          status: "succeeded",
+          dryRun: false
+        } satisfies ToolReceipt;
+      }
+    });
+
+    const service = await createConfereService({
+      cwd: await mkdtemp(path.join(os.tmpdir(), "confere-service-")),
+      env: { RUNTIME_MODE: "dry-run", ALLOW_LIVE_MUTATIONS: "true" },
+      registryFactory: async () => ({ registry, warnings: [] }),
+      modelProvider: createFakeModelProvider({})
+    });
+    service.saveDraftForTest({
+      operationId: "op_legacy",
+      toolName: "asaas.update_charge_due_date",
+      request: "alterar vencimento",
+      params: { chargeIds: ["ch_legacy"], dueDateBr: "20/07/2026" },
+      createdAt: "2026-06-20T12:00:00.000Z"
+    });
+
+    const response = await service.executeApprovedOperation({ operationId: "op_legacy" });
+
+    expect(response.status).toBe("executed");
+    expect(calls).toEqual([
+      {
+        operationId: "op_legacy",
+        approvalText: "APROVAR op_legacy",
+        chargeId: "ch_legacy",
+        dueDateBr: "20/07/2026"
+      }
+    ]);
+  });
+
   it("allows live execution of the Conta Azul due-date reissue workflow", async () => {
     const registry = createToolRegistry();
     registry.register({
@@ -545,7 +580,7 @@ describe("confere service", () => {
     });
 
     const response = await service.runAgentTurn({
-      request: "criar boleto no Asaas",
+      request: "prosseguir com a operação solicitada",
       sessionId: "sess_risk"
     });
 
@@ -587,7 +622,7 @@ describe("confere service", () => {
     });
 
     const response = await service.runAgentTurn({
-      request: "criar venda Conta Azul",
+      request: "prosseguir com a operação solicitada",
       sessionId: "sess_dup"
     });
 
@@ -629,7 +664,7 @@ describe("confere service", () => {
     });
 
     const response = await service.runAgentTurn({
-      request: "criar venda Conta Azul",
+      request: "prosseguir com a operação solicitada",
       sessionId: "sess_orphan"
     });
 
@@ -638,6 +673,65 @@ describe("confere service", () => {
       status: "executed",
       receiptStatus: "failed",
       approvalAvailable: false
+    });
+  });
+  it("returns a friendly message when the LLM plan schema fails", async () => {
+    const service = await createConfereService({
+      cwd: await mkdtemp(path.join(os.tmpdir(), "confere-service-")),
+      env: { RUNTIME_MODE: "dry-run" },
+      registryFactory: async () => ({ registry: createToolRegistry(), warnings: [] }),
+      modelProvider: createFakeModelProvider({
+        intent: "",
+        toolName: "asaas.create_boleto_charge",
+        params: {},
+        missingFields: [],
+        questions: [],
+        risk: "low",
+        confidence: 0.2,
+        reason: ""
+      })
+    });
+
+    const response = await service.runAgentTurn({
+      request: "bom dia, tudo bem?",
+      sessionId: "sess_llm_schema_fail"
+    });
+
+    expect(response.result.status).toBe("blocked");
+    expect(response.result.summary).toContain("Não consegui montar um plano seguro");
+    expect(response.result.summary).not.toContain("schema");
+    expect(response.result.summary).not.toContain("Too small");
+  });
+
+  it("routes provider-only requests to the interactive menu without calling the LLM", async () => {
+    const provider = createFakeModelProvider({
+      intent: "should_not_run",
+      toolName: "asaas.create_boleto_charge",
+      params: {},
+      missingFields: [],
+      questions: [],
+      risk: "low",
+      confidence: 0.9,
+      reason: "não deveria chegar aqui"
+    });
+    const service = await createConfereService({
+      cwd: await mkdtemp(path.join(os.tmpdir(), "confere-service-")),
+      env: { RUNTIME_MODE: "dry-run" },
+      registryFactory: async () => ({ registry: createToolRegistry(), warnings: [] }),
+      modelProvider: provider
+    });
+
+    const response = await service.runAgentTurn({
+      request: "Quero fazer outra operação no conta azul",
+      sessionId: "sess_provider_menu"
+    });
+
+    expect(provider.calls).toHaveLength(0);
+    expect(response.result).toMatchObject({
+      status: "needs_input",
+      provider: "contaazul",
+      toolName: "confere.interactive_provider_menu",
+      missingFields: ["operation"]
     });
   });
 });

@@ -3,6 +3,8 @@
 *.env
 state.json
 **/state.json
+asaas/browser-profile/
+contaazul/browser-profile/
 
 # Operational data & generated artifacts
 artifacts/

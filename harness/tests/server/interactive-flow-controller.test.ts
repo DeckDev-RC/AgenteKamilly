@@ -6,6 +6,7 @@ import {
   runInteractiveFlowTurn
 } from "../../src/server/interactive-flow-controller.js";
 import { createToolRegistry } from "../../src/core/tool-registry.js";
+import { createInMemoryPreferencesStore } from "../../src/core/preferences-store.js";
 import type { ToolReceipt } from "../../src/core/tool-types.js";
 
 describe("interactive flow controller", () => {
@@ -42,6 +43,82 @@ describe("interactive flow controller", () => {
           __interactive: { flow: "provider_choice", action: "select_asaas_boleto" }
         }
       }
+    ]);
+  });
+
+  it("shows provider operations when the user cites Conta Azul without a concrete task", async () => {
+    const result = await runInteractiveFlowTurn({
+      request: "Quero fazer outra operação no conta azul",
+      registry: createToolRegistry(),
+      sessionId: "sess_provider_menu",
+      store: createInteractiveFlowStore()
+    });
+
+    expect(result.handled).toBe(true);
+    if (!result.handled) throw new Error("expected handled result");
+    expect(result.result).toMatchObject({
+      status: "needs_input",
+      provider: "contaazul",
+      toolName: "confere.interactive_provider_menu",
+      missingFields: ["operation"],
+      summary: "Qual operação você quer fazer no Conta Azul?"
+    });
+    expect(result.result.choices?.map((choice) => choice.label)).toEqual([
+      "Emitir boleto",
+      "Criar cliente",
+      "Mudar vencimento"
+    ]);
+  });
+
+  it("continues Conta Azul provider menu when the user types an operation label", async () => {
+    const store = createInteractiveFlowStore();
+    const registry = createToolRegistry();
+    registerTenantTools(registry);
+
+    await runInteractiveFlowTurn({
+      request: "Quero fazer outra operação no conta azul",
+      registry,
+      sessionId: "sess_provider_menu_type",
+      store
+    });
+
+    const result = await runInteractiveFlowTurn({
+      request: "Emitir boleto",
+      registry,
+      sessionId: "sess_provider_menu_type",
+      store
+    });
+
+    expect(result.handled).toBe(true);
+    if (!result.handled) throw new Error("expected handled result");
+    expect(result.result).toMatchObject({
+      status: "needs_input",
+      toolName: "contaazul.interactive_service_sale_boleto",
+      missingFields: ["tenantId"]
+    });
+    expect(result.result.toolName).not.toBe("confere.interactive_boleto_provider");
+  });
+
+  it("shows provider operations when the user cites Asaas without a concrete task", async () => {
+    const result = await runInteractiveFlowTurn({
+      request: "preciso de algo no asaas",
+      registry: createToolRegistry(),
+      sessionId: "sess_provider_menu_asaas",
+      store: createInteractiveFlowStore()
+    });
+
+    expect(result.handled).toBe(true);
+    if (!result.handled) throw new Error("expected handled result");
+    expect(result.result).toMatchObject({
+      status: "needs_input",
+      provider: "asaas",
+      toolName: "confere.interactive_provider_menu",
+      missingFields: ["operation"]
+    });
+    expect(result.result.choices?.map((choice) => choice.label)).toEqual([
+      "Emitir boleto",
+      "Baixar boleto",
+      "Mudar vencimento"
     ]);
   });
 
@@ -111,75 +188,26 @@ describe("interactive flow controller", () => {
     expect(start.result).toMatchObject({
       status: "needs_input",
       toolName: "asaas.interactive_boleto_charge",
-      missingFields: ["customerSearch"]
+      formId: "asaas_boleto_details",
+      missingFields: ["customerId", "valueBr", "dueDateBr", "description"]
+    });
+    expect(start.result.formChoices?.customerId?.[0]).toMatchObject({
+      id: "asaas-customer:asaas_cust_1",
+      label: "AZUOS ASSESSORIA CONTÁBIL LTDA"
     });
 
-    const customers = await runInteractiveFlowTurn({
-      request: "AZUOS",
-      registry,
-      sessionId: "sess_asaas",
-      store
-    });
-    expect(customers.handled).toBe(true);
-    if (!customers.handled) throw new Error("expected handled result");
-    expect(customers.result.choices).toEqual([
-      {
-        id: "asaas-customer:asaas_cust_1",
-        label: "AZUOS ASSESSORIA CONTÁBIL LTDA",
-        description: "Cliente Asaas",
-        params: {
-          __interactive: { flow: "asaas_boleto_charge", action: "select_customer" },
-          customerId: "asaas_cust_1",
-          customerName: "AZUOS ASSESSORIA CONTÁBIL LTDA"
-        }
-      },
-      {
-        id: "asaas-customer:asaas_cust_2",
-        label: "AZUOS SERVICOS LTDA",
-        description: "Cliente Asaas",
-        params: {
-          __interactive: { flow: "asaas_boleto_charge", action: "select_customer" },
-          customerId: "asaas_cust_2",
-          customerName: "AZUOS SERVICOS LTDA"
-        }
-      }
-    ]);
-
-    const valuePrompt = await runInteractiveFlowTurn({
-      request: "AZUOS ASSESSORIA CONTÁBIL LTDA",
+    const planned = await runInteractiveFlowTurn({
+      request: "Preparar boleto",
       registry,
       sessionId: "sess_asaas",
       store,
       params: {
-        __interactive: { flow: "asaas_boleto_charge", action: "select_customer" },
+        __interactive: { flow: "asaas_boleto_charge", action: "submit_asaas_boleto_details" },
         customerId: "asaas_cust_1",
-        customerName: "AZUOS ASSESSORIA CONTÁBIL LTDA"
+        valueBr: "10,00",
+        dueDateBr: "30/06/2026",
+        description: "Honorário mensal"
       }
-    });
-    expect(valuePrompt.handled).toBe(true);
-    if (!valuePrompt.handled) throw new Error("expected handled result");
-    expect(valuePrompt.result).toMatchObject({
-      missingFields: ["valueBr"],
-      questions: ["Digite o valor da cobrança (ex: 10,00)."]
-    });
-
-    await runInteractiveFlowTurn({
-      request: "10,00",
-      registry,
-      sessionId: "sess_asaas",
-      store
-    });
-    await runInteractiveFlowTurn({
-      request: "30/06/2026",
-      registry,
-      sessionId: "sess_asaas",
-      store
-    });
-    const planned = await runInteractiveFlowTurn({
-      request: "Honorário mensal",
-      registry,
-      sessionId: "sess_asaas",
-      store
     });
 
     expect(planned.handled).toBe(true);
@@ -255,10 +283,11 @@ describe("interactive flow controller", () => {
     ]);
   });
 
-  it("uses a structured tenant selection before asking for the customer search term", async () => {
+  it("preloads customers after the tenant selection", async () => {
     const store = createInteractiveFlowStore();
     const registry = createToolRegistry();
     registerTenantTools(registry);
+    registerSearchTools(registry);
 
     await runInteractiveFlowTurn({
       request: "Emitir Novo Boleto de Serviço",
@@ -284,8 +313,12 @@ describe("interactive flow controller", () => {
     if (!result.handled) throw new Error("expected handled result");
     expect(result.result).toMatchObject({
       status: "needs_input",
-      missingFields: ["customerSearch"],
-      questions: ["Digite o nome do cliente para pesquisa."]
+      missingFields: ["customerId"],
+      questions: ["Selecione o cliente para esta venda."]
+    });
+    expect(result.result.choices?.[0]).toMatchObject({
+      id: "customer:cust_1",
+      label: "AZUOS ASSESSORIA CONTÁBIL LTDA"
     });
   });
 
@@ -315,6 +348,7 @@ describe("interactive flow controller", () => {
         });
       }
     });
+    registerSearchTools(registry);
 
     await runInteractiveFlowTurn({
       request: "Emitir Novo Boleto de Serviço",
@@ -339,28 +373,16 @@ describe("interactive flow controller", () => {
     expect(calls).toEqual([{ relationId: "rel_mais" }]);
   });
 
-  it("searches customers after the tenant selection and shows candidate choices", async () => {
+  it("preloads customer choices immediately after tenant selection", async () => {
     const store = createInteractiveFlowStore();
     const registry = createToolRegistry();
     registerTenantTools(registry);
-    registry.register({
-      name: "contaazul.search_sale_customers",
-      description: "Search customers",
-      parameters: z.object({
-        relationId: z.string(),
-        searchTerm: z.string()
-      }),
-      execute: async () =>
-        receipt("contaazul.search_sale_customers", [
-          { id: "cust_1", name: "AZUOS ASSESSORIA CONTÁBIL LTDA" },
-          { id: "cust_2", name: "AZUOS SERVICOS LTDA" }
-        ])
-    });
+    registerSearchTools(registry);
 
     await startAndSelectTenant(store, registry);
 
     const result = await runInteractiveFlowTurn({
-      request: "AZUOS",
+      request: "",
       registry,
       sessionId: "sess_contaazul",
       store
@@ -383,33 +405,17 @@ describe("interactive flow controller", () => {
           customerId: "cust_1",
           customerName: "AZUOS ASSESSORIA CONTÁBIL LTDA"
         }
-      },
-      {
-        id: "customer:cust_2",
-        label: "AZUOS SERVICOS LTDA",
-        description: "Cliente Conta Azul",
-        params: {
-          __interactive: { flow: "contaazul_service_sale_boleto", action: "select_customer" },
-          customerId: "cust_2",
-          customerName: "AZUOS SERVICOS LTDA"
-        }
       }
     ]);
   });
 
-  it("moves through customer, category, and item choices before asking item details", async () => {
+  it("opens the sale form with category and item choices after customer selection", async () => {
     const store = createInteractiveFlowStore();
     const registry = createToolRegistry();
     registerTenantTools(registry);
     registerSearchTools(registry);
 
     await startAndSelectTenant(store, registry);
-    await runInteractiveFlowTurn({
-      request: "AZUOS",
-      registry,
-      sessionId: "sess_contaazul",
-      store
-    });
 
     const afterCustomer = await runInteractiveFlowTurn({
       request: "AZUOS ASSESSORIA CONTÁBIL LTDA",
@@ -425,74 +431,29 @@ describe("interactive flow controller", () => {
     expect(afterCustomer.handled).toBe(true);
     if (!afterCustomer.handled) throw new Error("expected handled result");
     expect(afterCustomer.result).toMatchObject({
-      missingFields: ["categorySearch"],
-      questions: ["Digite o nome da categoria financeira."]
+      formId: "contaazul_service_sale_details",
+      missingFields: [
+        "categoryId",
+        "itemId",
+        "serviceDescription",
+        "unitValueBr",
+        "dueDateBr",
+        "notification.phone",
+        "notification.email",
+        "notification.replyTo"
+      ]
     });
-
-    const categorySearch = await runInteractiveFlowTurn({
-      request: "Honorário contábil mensal",
-      registry,
-      sessionId: "sess_contaazul",
-      store
-    });
-    expect(categorySearch.handled).toBe(true);
-    if (!categorySearch.handled) throw new Error("expected handled result");
-    expect(categorySearch.result.choices?.[0]).toMatchObject({
+    expect(afterCustomer.result.formChoices?.categoryId?.[0]).toMatchObject({
       id: "category:cat_1",
       label: "Honorário contábil mensal"
     });
-
-    const afterCategory = await runInteractiveFlowTurn({
-      request: "Honorário contábil mensal",
-      registry,
-      sessionId: "sess_contaazul",
-      store,
-      params: {
-        __interactive: { flow: "contaazul_service_sale_boleto", action: "select_category" },
-        categoryId: "cat_1",
-        categoryName: "Honorário contábil mensal"
-      }
-    });
-    expect(afterCategory.handled).toBe(true);
-    if (!afterCategory.handled) throw new Error("expected handled result");
-    expect(afterCategory.result).toMatchObject({
-      missingFields: ["itemSearch"],
-      questions: ["Digite o nome do item de serviço."]
-    });
-
-    const itemSearch = await runInteractiveFlowTurn({
-      request: "Honorário Contábil",
-      registry,
-      sessionId: "sess_contaazul",
-      store
-    });
-    expect(itemSearch.handled).toBe(true);
-    if (!itemSearch.handled) throw new Error("expected handled result");
-    expect(itemSearch.result.choices?.[0]).toMatchObject({
+    expect(afterCustomer.result.formChoices?.itemId?.[0]).toMatchObject({
       id: "item:item_1",
       label: "Honorário Contábil"
     });
-
-    const afterItem = await runInteractiveFlowTurn({
-      request: "Honorário Contábil",
-      registry,
-      sessionId: "sess_contaazul",
-      store,
-      params: {
-        __interactive: { flow: "contaazul_service_sale_boleto", action: "select_item" },
-        itemId: "item_1",
-        itemName: "Honorário Contábil"
-      }
-    });
-    expect(afterItem.handled).toBe(true);
-    if (!afterItem.handled) throw new Error("expected handled result");
-    expect(afterItem.result).toMatchObject({
-      missingFields: ["serviceDescription"],
-      questions: ["Digite os detalhes do item."]
-    });
   });
 
-  it("collects final sale fields one by one and then plans the workflow dry-run", async () => {
+  it("collects sale fields via inline form and then plans the workflow dry-run", async () => {
     const store = createInteractiveFlowStore();
     const registry = createToolRegistry();
     const calls: unknown[] = [];
@@ -513,80 +474,24 @@ describe("interactive flow controller", () => {
       }
     });
 
-    await reachItemSelection(store, registry);
-
-    const unitValuePrompt = await runInteractiveFlowTurn({
-      request: "Honorário mensal",
-      registry,
-      sessionId: "sess_contaazul",
-      store
-    });
-    expect(unitValuePrompt.handled).toBe(true);
-    if (!unitValuePrompt.handled) throw new Error("expected handled result");
-    expect(unitValuePrompt.result).toMatchObject({
-      missingFields: ["unitValueBr"],
-      questions: ["Digite o valor unitário (ex: 10,00)."]
-    });
-
-    const dueDatePrompt = await runInteractiveFlowTurn({
-      request: "10,00",
-      registry,
-      sessionId: "sess_contaazul",
-      store
-    });
-    expect(dueDatePrompt.handled).toBe(true);
-    if (!dueDatePrompt.handled) throw new Error("expected handled result");
-    expect(dueDatePrompt.result).toMatchObject({
-      missingFields: ["dueDateBr"],
-      questions: ["Digite a data de vencimento (DD/MM/AAAA)."]
-    });
-
-    const phonePrompt = await runInteractiveFlowTurn({
-      request: "30/06/2026",
-      registry,
-      sessionId: "sess_contaazul",
-      store
-    });
-    expect(phonePrompt.handled).toBe(true);
-    if (!phonePrompt.handled) throw new Error("expected handled result");
-    expect(phonePrompt.result).toMatchObject({
-      missingFields: ["notification.phone"],
-      questions: ["Digite o telefone celular do cliente com DDD."]
-    });
-
-    const emailPrompt = await runInteractiveFlowTurn({
-      request: "62991514384",
-      registry,
-      sessionId: "sess_contaazul",
-      store
-    });
-    expect(emailPrompt.handled).toBe(true);
-    if (!emailPrompt.handled) throw new Error("expected handled result");
-    expect(emailPrompt.result).toMatchObject({
-      missingFields: ["notification.email"],
-      questions: ["Digite o e-mail de cobrança do cliente."]
-    });
-
-    const replyToPrompt = await runInteractiveFlowTurn({
-      request: "kamilly.agregarnegocios@gmail.com",
-      registry,
-      sessionId: "sess_contaazul",
-      store
-    });
-    expect(replyToPrompt.handled).toBe(true);
-    if (!replyToPrompt.handled) throw new Error("expected handled result");
-    expect(replyToPrompt.result).toMatchObject({
-      missingFields: ["notification.replyTo"],
-      questions: [
-        "Digite o e-mail para o destinatário entrar em contato (deixe em branco para usar o padrão do harness)."
-      ]
-    });
+    await reachSaleForm(store, registry);
 
     const planned = await runInteractiveFlowTurn({
-      request: "sccontabilidadefinanceiro@gmail.com",
+      request: "Preparar cobrança",
       registry,
       sessionId: "sess_contaazul",
-      store
+      store,
+      params: {
+        __interactive: { flow: "contaazul_service_sale_boleto", action: "submit_sale_details" },
+        categoryId: "cat_1",
+        itemId: "item_1",
+        serviceDescription: "Honorário mensal",
+        unitValueBr: "10,00",
+        dueDateBr: "30/06/2026",
+        "notification.phone": "62991514384",
+        "notification.email": "kamilly.agregarnegocios@gmail.com",
+        "notification.replyTo": "sccontabilidadefinanceiro@gmail.com"
+      }
     });
     expect(planned.handled).toBe(true);
     if (!planned.handled) throw new Error("expected handled result");
@@ -616,55 +521,53 @@ describe("interactive flow controller", () => {
     ]);
   });
 
-  it("keeps asking for due date when the typed date is invalid", async () => {
+  it("keeps the sale form open when the due date is invalid", async () => {
     const store = createInteractiveFlowStore();
     const registry = createToolRegistry();
     registerTenantTools(registry);
     registerSearchTools(registry);
-    await reachItemSelection(store, registry);
-    await runInteractiveFlowTurn({
-      request: "Honorário mensal",
-      registry,
-      sessionId: "sess_contaazul",
-      store
-    });
-    await runInteractiveFlowTurn({
-      request: "10,00",
-      registry,
-      sessionId: "sess_contaazul",
-      store
-    });
+    await reachSaleForm(store, registry);
 
     const result = await runInteractiveFlowTurn({
-      request: "2026-06-30",
+      request: "Preparar cobrança",
       registry,
       sessionId: "sess_contaazul",
-      store
+      store,
+      params: {
+        __interactive: { flow: "contaazul_service_sale_boleto", action: "submit_sale_details" },
+        categoryId: "cat_1",
+        itemId: "item_1",
+        serviceDescription: "Honorário mensal",
+        unitValueBr: "10,00",
+        dueDateBr: "2026-06-30",
+        "notification.phone": "62991514384",
+        "notification.email": "kamilly.agregarnegocios@gmail.com"
+      }
     });
 
     expect(result.handled).toBe(true);
     if (!result.handled) throw new Error("expected handled result");
     expect(result.result).toMatchObject({
-      missingFields: ["dueDateBr"],
-      questions: ["Digite a data de vencimento no formato DD/MM/AAAA."]
+      formId: "contaazul_service_sale_details",
+      summary: expect.stringContaining("vencimento")
     });
   });
 
-  it("re-prompts the customer search when no Conta Azul customer matches", async () => {
+  it("returns an empty customer list when no Conta Azul customers exist", async () => {
     const store = createInteractiveFlowStore();
     const registry = createToolRegistry();
     registerTenantTools(registry);
     registry.register({
       name: "contaazul.search_sale_customers",
       description: "Search customers",
-      parameters: z.object({ relationId: z.string(), searchTerm: z.string() }),
+      parameters: z.object({ relationId: z.string(), listAll: z.boolean().optional() }),
       execute: async () => receipt("contaazul.search_sale_customers", [])
     });
 
     await startAndSelectTenant(store, registry);
 
     const result = await runInteractiveFlowTurn({
-      request: "Irani",
+      request: "",
       registry,
       sessionId: "sess_contaazul",
       store
@@ -674,8 +577,8 @@ describe("interactive flow controller", () => {
     if (!result.handled) throw new Error("expected handled result");
     expect(result.result).toMatchObject({
       status: "needs_input",
-      missingFields: ["customerSearch"],
-      questions: ['Não encontrei ninguém com "Irani". Tente outro nome.']
+      missingFields: ["customerId"],
+      questions: ["Nenhum cliente cadastrado. Use a opção para criar um novo."]
     });
     expect(result.result.choices ?? []).toEqual([]);
   });
@@ -727,39 +630,198 @@ describe("interactive flow controller", () => {
       }
     });
 
-    await runInteractiveFlowTurn({
+    const start = await runInteractiveFlowTurn({
       request: "começar",
       registry, sessionId: "sess_au", store,
       params: { __interactive: { flow: "anchor", action: "start_asaas_update_due_date" } }
     });
+    expect(start.handled).toBe(true);
+    if (!start.handled) throw new Error("expected handled result");
+    expect(start.result).toMatchObject({
+      formId: "asaas_update_due_date",
+      missingFields: ["customerId", "chargeIds", "dueDateBr"]
+    });
 
-    const charges = await runInteractiveFlowTurn({ request: "JOÃO", registry, sessionId: "sess_au", store });
-    expect(charges.handled).toBe(true);
-    if (!charges.handled) throw new Error("expected handled result");
-    expect(charges.result.choices?.[0]).toMatchObject({
-      id: "asaas-charge:ch_1",
-      label: "Mensalidade",
+    const withCharges = await runInteractiveFlowTurn({
+      request: "",
+      registry,
+      sessionId: "sess_au",
+      store,
       params: {
-        __interactive: { flow: "asaas_update_charge_due_date", action: "select_charge" },
-        chargeId: "ch_1"
+        __interactive: { flow: "asaas_update_charge_due_date", action: "load_asaas_charges" },
+        customerId: "ac_1",
+        customerName: "JOÃO LTDA"
       }
     });
-
-    const askDate = await runInteractiveFlowTurn({
-      request: "Mensalidade", registry, sessionId: "sess_au", store,
-      params: { __interactive: { flow: "asaas_update_charge_due_date", action: "select_charge" }, chargeId: "ch_1" }
+    expect(withCharges.handled).toBe(true);
+    if (!withCharges.handled) throw new Error("expected handled result");
+    expect(withCharges.result.formChoices?.chargeId?.[0]).toMatchObject({
+      id: "asaas-charge:ch_1",
+      label: "Mensalidade"
     });
-    expect(askDate.handled).toBe(true);
-    if (!askDate.handled) throw new Error("expected handled result");
-    expect(askDate.result).toMatchObject({ missingFields: ["dueDateBr"] });
 
-    const planned = await runInteractiveFlowTurn({ request: "20/07/2026", registry, sessionId: "sess_au", store });
+    const planned = await runInteractiveFlowTurn({
+      request: "Preparar alteração",
+      registry,
+      sessionId: "sess_au",
+      store,
+      params: {
+        __interactive: { flow: "asaas_update_charge_due_date", action: "submit_asaas_update_details" },
+        customerId: "ac_1",
+        chargeIds: ["ch_1"],
+        dueDateBr: "20/07/2026"
+      }
+    });
     expect(planned.handled).toBe(true);
     if (!planned.handled) throw new Error("expected handled result");
     expect(planned.draftOperationId).toBe("op_asaas_update");
+    expect(planned.draft).toMatchObject({
+      operationId: "op_asaas_update",
+      toolName: "asaas.update_charge_due_date",
+      params: { chargeId: "ch_1", dueDateBr: "20/07/2026" }
+    });
     expect(planned.result).toMatchObject({ status: "executed", receiptStatus: "planned", approvalAvailable: true });
     expect(calls).toEqual([{ chargeId: "ch_1", dueDateBr: "20/07/2026" }]);
+
+    calls.length = 0;
+    const multiPlanned = await runInteractiveFlowTurn({
+      request: "Preparar alteração",
+      registry,
+      sessionId: "sess_au_multi",
+      store: createInteractiveFlowStore(),
+      params: {
+        __interactive: { flow: "asaas_update_charge_due_date", action: "submit_asaas_update_details" },
+        customerId: "ac_1",
+        chargeIds: ["ch_1", "ch_2"],
+        dueDateBr: "20/07/2026"
+      }
+    });
+    expect(multiPlanned.handled).toBe(true);
+    if (!multiPlanned.handled) throw new Error("expected handled result");
+    expect(multiPlanned.result.summary).toContain("2 alterações preparadas");
+    expect(calls).toEqual([
+      { chargeId: "ch_1", dueDateBr: "20/07/2026" },
+      { chargeId: "ch_2", dueDateBr: "20/07/2026" }
+    ]);
+    expect(multiPlanned.drafts).toHaveLength(2);
+    expect(multiPlanned.drafts?.[0]?.params).toMatchObject({ chargeId: "ch_1", dueDateBr: "20/07/2026" });
+    expect(multiPlanned.drafts?.[1]?.params).toMatchObject({ chargeId: "ch_2", dueDateBr: "20/07/2026" });
   });
+
+  it("runs the Asaas download-boleto flow from anchor through PDF download", async () => {
+    const store = createInteractiveFlowStore();
+    const registry = createToolRegistry();
+    registry.register({
+      name: "asaas.search_customers",
+      description: "Search Asaas customers",
+      parameters: z.object({ query: z.string() }),
+      execute: async () => receipt("asaas.search_customers", [{ id: "ac_1", name: "JOÃO LTDA" }])
+    });
+    registry.register({
+      name: "asaas.list_charges",
+      description: "List all charges",
+      parameters: z.object({}).passthrough(),
+      execute: async () =>
+        receipt("asaas.list_charges", [
+          {
+            id: "ch_1",
+            customerId: "ac_1",
+            valueBr: "150,00",
+            dueDateBr: "10/06/2026",
+            status: "Recebida",
+            description: "Mensalidade"
+          },
+          {
+            id: "ch_2",
+            customerId: "ac_1",
+            valueBr: "80,00",
+            dueDateBr: "20/07/2026",
+            status: "Aguardando pagamento",
+            description: "Taxa extra"
+          }
+        ])
+    });
+    registry.register({
+      name: "asaas.get_charge_links",
+      description: "Get charge links",
+      parameters: z.object({ chargeId: z.string() }),
+      execute: async () =>
+        receipt("asaas.get_charge_links", {
+          chargeId: "ch_1",
+          externalToken: "tok_test_123",
+          boletoUrl: "https://www.asaas.com/b/pdf/tok_test_123"
+        })
+    });
+    registry.register({
+      name: "asaas.download_boleto_pdf",
+      description: "Download boleto pdf",
+      parameters: z.object({}).passthrough(),
+      execute: async () =>
+        ({
+          ...receipt("asaas.download_boleto_pdf", { plannedRequest: { method: "GET" } }),
+          status: "succeeded",
+          summary: "PDF do boleto baixado do Asaas.",
+          artifacts: [
+            {
+              kind: "pdf",
+              path: "C:/tmp/Mensalidade.pdf",
+              label: "boleto pdf"
+            }
+          ]
+        }) satisfies ToolReceipt
+    });
+
+    const start = await runInteractiveFlowTurn({
+      request: "começar",
+      registry,
+      sessionId: "sess_dl",
+      store,
+      params: { __interactive: { flow: "anchor", action: "start_asaas_download_boleto" } }
+    });
+    expect(start.handled).toBe(true);
+    if (!start.handled) throw new Error("expected handled result");
+    expect(start.result).toMatchObject({
+      formId: "asaas_download_boleto",
+      missingFields: ["customerId", "chargeId"]
+    });
+
+    const withCharges = await runInteractiveFlowTurn({
+      request: "",
+      registry,
+      sessionId: "sess_dl",
+      store,
+      params: {
+        __interactive: { flow: "asaas_download_boleto", action: "load_asaas_charges" },
+        customerId: "ac_1",
+        customerName: "JOÃO LTDA"
+      }
+    });
+    expect(withCharges.handled).toBe(true);
+    if (!withCharges.handled) throw new Error("expected handled result");
+    expect(withCharges.result.formChoices?.chargeId).toHaveLength(2);
+
+    const downloaded = await runInteractiveFlowTurn({
+      request: "Baixar PDF",
+      registry,
+      sessionId: "sess_dl",
+      store,
+      params: {
+        __interactive: { flow: "asaas_download_boleto", action: "submit_asaas_download_boleto" },
+        customerId: "ac_1",
+        chargeId: "ch_1"
+      }
+    });
+    expect(downloaded.handled).toBe(true);
+    if (!downloaded.handled) throw new Error("expected handled result");
+    expect(downloaded.result).toMatchObject({
+      status: "executed",
+      toolName: "asaas.download_boleto_pdf",
+      receiptStatus: "succeeded",
+      summary: "PDF do boleto baixado com sucesso."
+    });
+    expect((downloaded.result.receiptData as { artifacts?: unknown[] })?.artifacts).toHaveLength(1);
+  });
+
   it("collects a Física customer and plans the create-customer workflow", async () => {
     const store = createInteractiveFlowStore();
     const registry = createToolRegistry();
@@ -824,11 +886,10 @@ describe("interactive flow controller", () => {
       request: "começar", registry, sessionId: "sess_cu", store,
       params: { __interactive: { flow: "anchor", action: "start_contaazul_update_due_date" } }
     });
-    await runInteractiveFlowTurn({
+    const choices = await runInteractiveFlowTurn({
       request: "MAIS NEGOCIOS", registry, sessionId: "sess_cu", store,
       params: { __interactive: { flow: "contaazul_update_due_date", action: "select_tenant" }, tenantId: 3047702, relationId: "rel_mais", tenantName: "MAIS NEGOCIOS" }
     });
-    const choices = await runInteractiveFlowTurn({ request: "JOÃO", registry, sessionId: "sess_cu", store });
     expect(choices.handled).toBe(true);
     if (!choices.handled) throw new Error("expected handled result");
     expect(choices.result.choices?.[0]).toMatchObject({
@@ -849,7 +910,7 @@ describe("interactive flow controller", () => {
     expect(calls).toEqual([{ tenantId: 3047702, financialEventId: "fe_1", installmentId: "inst_1", dueDateIso: "2026-07-20" }]);
   });
 
-  it("opens the boleto flow at the category step when pre-seeded with a customer", async () => {
+  it("opens the boleto flow at the sale form when pre-seeded with a customer", async () => {
     const store = createInteractiveFlowStore();
     const registry = createToolRegistry();
     registerTenantTools(registry);
@@ -861,7 +922,187 @@ describe("interactive flow controller", () => {
     });
     expect(result.handled).toBe(true);
     if (!result.handled) throw new Error("expected handled result");
-    expect(result.result).toMatchObject({ missingFields: ["categorySearch"], questions: ["Digite o nome da categoria financeira."] });
+    expect(result.result).toMatchObject({
+      formId: "contaazul_service_sale_details",
+      missingFields: expect.arrayContaining(["categoryId", "itemId"])
+    });
+  });
+
+  it("roteia 'cadastrar cliente' por linguagem natural para o fluxo de cadastro", async () => {
+    const registry = createToolRegistry();
+    registerTenantTools(registry);
+
+    const result = await runInteractiveFlowTurn({
+      request: "quero cadastrar um novo cliente",
+      registry,
+      sessionId: "sess_nl_customer",
+      store: createInteractiveFlowStore()
+    });
+
+    expect(result.handled).toBe(true);
+    if (!result.handled) throw new Error("expected handled result");
+    expect(result.result.missingFields).toContain("tenantId");
+    expect(result.result.choices?.[0]?.params).toMatchObject({
+      __interactive: { flow: "contaazul_create_customer", action: "select_tenant" }
+    });
+  });
+
+  it("roteia consulta de boletos por linguagem natural para a lista de lançamentos", async () => {
+    const registry = createToolRegistry();
+    registerTenantTools(registry);
+
+    const result = await runInteractiveFlowTurn({
+      request: "me entregue todos os boletos do cliente AZUOS",
+      registry,
+      sessionId: "sess_nl_list",
+      store: createInteractiveFlowStore()
+    });
+
+    expect(result.handled).toBe(true);
+    if (!result.handled) throw new Error("expected handled result");
+    expect(result.result.choices?.[0]?.params).toMatchObject({
+      __interactive: { flow: "contaazul_list_charges", action: "select_tenant" }
+    });
+  });
+
+  it("entrega os boletos filtrados por cliente/vencidos após escolher a empresa", async () => {
+    const registry = createToolRegistry();
+    registerTenantTools(registry);
+    registry.register({
+      name: "contaazul.search_financial_statement",
+      description: "Statement",
+      parameters: z.object({ relationId: z.string() }),
+      execute: async () =>
+        receipt("contaazul.search_financial_statement", [
+          { id: "1", financialEventId: "fe1", description: "Honorário", value: 250, dueDateIso: "2026-06-30", customerName: "AZUOS ASSESSORIA", status: "PENDING" },
+          { id: "2", financialEventId: "fe2", description: "Outro", value: 90, dueDateIso: "2026-06-30", customerName: "OUTRA EMPRESA", status: "PENDING" }
+        ])
+    });
+    const store = createInteractiveFlowStore();
+    const sessionId = "sess_nl_list_deliver";
+
+    await runInteractiveFlowTurn({
+      request: "me entregue os boletos do cliente AZUOS",
+      registry,
+      sessionId,
+      store
+    });
+
+    const delivered = await runInteractiveFlowTurn({
+      request: "MAIS NEGOCIOS",
+      registry,
+      sessionId,
+      store,
+      params: {
+        __interactive: { flow: "contaazul_list_charges", action: "select_tenant" },
+        tenantId: 3047702,
+        relationId: "rel_mais",
+        tenantName: "MAIS NEGOCIOS"
+      }
+    });
+
+    expect(delivered.handled).toBe(true);
+    if (!delivered.handled) throw new Error("expected handled result");
+    expect(delivered.result.toolName).toBe("contaazul.search_financial_statement");
+    // Só o boleto da AZUOS deve sobrar (filtrado pelo cliente citado).
+    expect(Array.isArray(delivered.result.receiptData)).toBe(true);
+    const rows = delivered.result.receiptData as Array<{ customerName?: string }>;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.customerName).toBe("AZUOS ASSESSORIA");
+  });
+
+  it("auto-seleciona o cliente citado em linguagem natural (slot-filling)", async () => {
+    const registry = createToolRegistry();
+    registerTenantTools(registry);
+    registerSearchTools(registry);
+    const store = createInteractiveFlowStore();
+    const sessionId = "sess_nl_autoselect";
+
+    const start = await runInteractiveFlowTurn({
+      request: "emite um boleto pra AZUOS na conta azul vencendo 30/06",
+      registry,
+      sessionId,
+      store
+    });
+    expect(start.handled).toBe(true);
+    if (!start.handled) throw new Error("expected handled result");
+    expect(start.result.choices?.[0]?.params).toMatchObject({
+      __interactive: { flow: "contaazul_service_sale_boleto", action: "select_tenant" }
+    });
+
+    const afterTenant = await runInteractiveFlowTurn({
+      request: "MAIS NEGOCIOS",
+      registry,
+      sessionId,
+      store,
+      params: {
+        __interactive: { flow: "contaazul_service_sale_boleto", action: "select_tenant" },
+        tenantId: 3047702,
+        relationId: "rel_mais",
+        tenantName: "MAIS NEGOCIOS"
+      }
+    });
+    expect(afterTenant.handled).toBe(true);
+    if (!afterTenant.handled) throw new Error("expected handled result");
+    // Cliente AZUOS foi resolvido sozinho (1 correspondência) → já pede categoria.
+    expect(afterTenant.result.missingFields).toContain("categoryId");
+    expect(afterTenant.result.summary ?? "").toContain("AZUOS");
+  });
+
+  it("coloca a empresa lembrada no topo da escolha (memória)", async () => {
+    const registry = createToolRegistry();
+    registry.register({
+      name: "contaazul.list_accountancy_clients",
+      description: "List tenants",
+      parameters: z.object({}),
+      execute: async () =>
+        receipt("contaazul.list_accountancy_clients", [
+          { tenantId: 101, relationId: "rel_a", name: "EMPRESA A", active: true },
+          { tenantId: 202, relationId: "rel_b", name: "EMPRESA B", active: true }
+        ])
+    });
+    const memory = createInMemoryPreferencesStore({
+      lastTenant: { tenantId: 202, relationId: "rel_b", tenantName: "EMPRESA B" }
+    });
+
+    const result = await runInteractiveFlowTurn({
+      request: "quero cadastrar um novo cliente",
+      registry,
+      sessionId: "sess_mem",
+      store: createInteractiveFlowStore(),
+      memory
+    });
+
+    expect(result.handled).toBe(true);
+    if (!result.handled) throw new Error("expected handled result");
+    expect(result.result.choices?.[0]?.label).toBe("EMPRESA B");
+    expect(result.result.choices?.[0]?.description).toBe("Usada recentemente");
+  });
+
+  it("registra a empresa selecionada na memória", async () => {
+    const registry = createToolRegistry();
+    registerTenantTools(registry);
+    registerSearchTools(registry);
+    const memory = createInMemoryPreferencesStore();
+    const store = createInteractiveFlowStore();
+    const sessionId = "sess_mem_record";
+
+    await runInteractiveFlowTurn({ request: "criar cliente", registry, sessionId, store, memory });
+    await runInteractiveFlowTurn({
+      request: "MAIS NEGOCIOS",
+      registry,
+      sessionId,
+      store,
+      memory,
+      params: {
+        __interactive: { flow: "contaazul_create_customer", action: "select_tenant" },
+        tenantId: 3047702,
+        relationId: "rel_mais",
+        tenantName: "MAIS NEGOCIOS"
+      }
+    });
+
+    expect(memory.get().lastTenant?.tenantId).toBe(3047702);
   });
 });
 
@@ -894,7 +1135,8 @@ function registerSearchTools(registry: ReturnType<typeof createToolRegistry>): v
     description: "Search customers",
     parameters: z.object({
       relationId: z.string(),
-      searchTerm: z.string()
+      searchTerm: z.string().optional(),
+      listAll: z.boolean().optional()
     }),
     execute: async () =>
       receipt("contaazul.search_sale_customers", [
@@ -906,7 +1148,8 @@ function registerSearchTools(registry: ReturnType<typeof createToolRegistry>): v
     description: "Search categories",
     parameters: z.object({
       relationId: z.string(),
-      searchTerm: z.string()
+      searchTerm: z.string().optional(),
+      listAll: z.boolean().optional()
     }),
     execute: async () =>
       receipt("contaazul.search_financial_categories", [
@@ -918,7 +1161,8 @@ function registerSearchTools(registry: ReturnType<typeof createToolRegistry>): v
     description: "Search items",
     parameters: z.object({
       relationId: z.string(),
-      searchTerm: z.string()
+      searchTerm: z.string().optional(),
+      listAll: z.boolean().optional()
     }),
     execute: async () =>
       receipt("contaazul.search_service_items", [
@@ -951,17 +1195,11 @@ async function startAndSelectTenant(
   });
 }
 
-async function reachItemSelection(
+async function reachSaleForm(
   store: ReturnType<typeof createInteractiveFlowStore>,
   registry: ReturnType<typeof createToolRegistry>
 ): Promise<void> {
   await startAndSelectTenant(store, registry);
-  await runInteractiveFlowTurn({
-    request: "AZUOS",
-    registry,
-    sessionId: "sess_contaazul",
-    store
-  });
   await runInteractiveFlowTurn({
     request: "AZUOS ASSESSORIA CONTÁBIL LTDA",
     registry,
@@ -971,40 +1209,6 @@ async function reachItemSelection(
       __interactive: { flow: "contaazul_service_sale_boleto", action: "select_customer" },
       customerId: "cust_1",
       customerName: "AZUOS ASSESSORIA CONTÁBIL LTDA"
-    }
-  });
-  await runInteractiveFlowTurn({
-    request: "Honorário contábil mensal",
-    registry,
-    sessionId: "sess_contaazul",
-    store
-  });
-  await runInteractiveFlowTurn({
-    request: "Honorário contábil mensal",
-    registry,
-    sessionId: "sess_contaazul",
-    store,
-    params: {
-      __interactive: { flow: "contaazul_service_sale_boleto", action: "select_category" },
-      categoryId: "cat_1",
-      categoryName: "Honorário contábil mensal"
-    }
-  });
-  await runInteractiveFlowTurn({
-    request: "Honorário Contábil",
-    registry,
-    sessionId: "sess_contaazul",
-    store
-  });
-  await runInteractiveFlowTurn({
-    request: "Honorário Contábil",
-    registry,
-    sessionId: "sess_contaazul",
-    store,
-    params: {
-      __interactive: { flow: "contaazul_service_sale_boleto", action: "select_item" },
-      itemId: "item_1",
-      itemName: "Honorário Contábil"
     }
   });
 }

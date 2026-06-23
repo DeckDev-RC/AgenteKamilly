@@ -89,6 +89,9 @@ function fakeService(): ConfereService {
         ledgerPath: "ledger.jsonl"
       };
     },
+    async checkConnections() {
+      return [];
+    },
     async runAgentTurn() {
       return {
         status: "ok",

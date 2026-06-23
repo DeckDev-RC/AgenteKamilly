@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   filterCustomersByQuery,
   parseChargeLinksFromHtml,
+  parseChargesTableContent,
   parseCustomerTableContent,
   parsePendingChargesTableContent
 } from "../../../src/modules/asaas/parsers.js";
@@ -55,6 +56,32 @@ describe("Asaas parsers", () => {
         dueDateBr: "20/07/2026",
         status: "Aguardando pagamento",
         description: "HONORARIO MENSAL"
+      }
+    ]);
+  });
+
+  it("returns all boleto charges regardless of status when filter is all", () => {
+    const fixture = JSON.parse(
+      readFileSync(join(fixturesDir, "pending-charges.json"), "utf-8")
+    ) as { content: string };
+
+    expect(parseChargesTableContent(fixture.content, "101", { statusFilter: "all" })).toEqual([
+      {
+        id: "501",
+        customerId: "101",
+        customerName: "Cliente Exemplo Ltda",
+        valueBr: "R$ 120,50",
+        dueDateBr: "20/07/2026",
+        status: "Aguardando pagamento",
+        description: "HONORARIO MENSAL"
+      },
+      {
+        id: "502",
+        customerId: "101",
+        customerName: "Cliente Exemplo Ltda",
+        valueBr: "R$ 80,00",
+        dueDateBr: "10/07/2026",
+        status: "Recebida"
       }
     ]);
   });

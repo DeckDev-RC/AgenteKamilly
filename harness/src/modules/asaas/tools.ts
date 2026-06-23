@@ -23,11 +23,13 @@ import {
   filterCustomersByQuery,
   parseChargeLinksFromHtml,
   parseCustomerTableContent,
+  parseChargesTableContent,
   parsePendingChargesTableContent
 } from "./parsers.js";
 
 const SEARCH_CUSTOMERS_TOOL = "asaas.search_customers";
 const LIST_PENDING_CHARGES_TOOL = "asaas.list_pending_charges";
+const LIST_CHARGES_TOOL = "asaas.list_charges";
 const GET_CHARGE_LINKS_TOOL = "asaas.get_charge_links";
 const UPDATE_CHARGE_DUE_DATE_TOOL = "asaas.update_charge_due_date";
 const CREATE_BOLETO_CHARGE_TOOL = "asaas.create_boleto_charge";
@@ -44,6 +46,12 @@ export const AsaasListPendingChargesParamsSchema = z.object({
   customerId: z.string().min(1)
 });
 
+export const AsaasListChargesParamsSchema = z.object({
+  customerId: z.string().min(1),
+  statusFilter: z.enum(["all", "pending"]).default("all"),
+  billingType: z.enum(["all", "boleto"]).default("boleto")
+});
+
 export const AsaasGetChargeLinksParamsSchema = z.object({
   chargeId: z.string().min(1)
 });
@@ -55,7 +63,8 @@ const ApprovalFieldsSchema = z.object({
 
 export const AsaasUpdateChargeDueDateParamsSchema = ApprovalFieldsSchema.extend({
   chargeId: z.string().min(1),
-  dueDateBr: z.string().regex(/^\d{2}\/\d{2}\/\d{4}$/)
+  dueDateBr: z.string().regex(/^\d{2}\/\d{2}\/\d{4}$/),
+  customerName: z.string().min(1).optional()
 });
 
 export const AsaasCreateBoletoChargeParamsSchema = ApprovalFieldsSchema.extend({
@@ -82,6 +91,7 @@ export const AsaasDownloadBoletoPdfParamsSchema = z.object({
 
 export type AsaasSearchCustomersParams = z.infer<typeof AsaasSearchCustomersParamsSchema>;
 export type AsaasListPendingChargesParams = z.infer<typeof AsaasListPendingChargesParamsSchema>;
+export type AsaasListChargesParams = z.infer<typeof AsaasListChargesParamsSchema>;
 export type AsaasGetChargeLinksParams = z.infer<typeof AsaasGetChargeLinksParamsSchema>;
 export type AsaasUpdateChargeDueDateParams = z.infer<
   typeof AsaasUpdateChargeDueDateParamsSchema
@@ -111,6 +121,7 @@ export type AsaasReadTools = {
   listPendingCharges(
     params: AsaasListPendingChargesParams
   ): Promise<ToolReceipt<PendingCharge[]>>;
+  listCharges(params: AsaasListChargesParams): Promise<ToolReceipt<PendingCharge[]>>;
   getChargeLinks(params: AsaasGetChargeLinksParams): Promise<ToolReceipt<ChargeLinks>>;
 };
 
@@ -196,6 +207,26 @@ export function createAsaasReadTools(options: CreateAsaasReadToolsOptions): Asaa
       });
     },
 
+    async listCharges(rawParams) {
+      const params = AsaasListChargesParamsSchema.parse(rawParams);
+      const operationId = createOperationId(LIST_CHARGES_TOOL);
+      const content = await options.client.listChargesPage(params.customerId, 0, 100);
+      const data = parseChargesTableContent(content, params.customerId, {
+        statusFilter: params.statusFilter,
+        billingType: params.billingType
+      });
+
+      return writeReadReceipt({
+        ledgerPath: options.ledgerPath,
+        operationId,
+        runtimeMode,
+        toolName: LIST_CHARGES_TOOL,
+        args: params,
+        data,
+        summary: `Encontradas ${data.length} cobranca(s) no Asaas.`
+      });
+    },
+
     async getChargeLinks(rawParams) {
       const params = AsaasGetChargeLinksParamsSchema.parse(rawParams);
       const operationId = createOperationId(GET_CHARGE_LINKS_TOOL);
@@ -251,9 +282,16 @@ export function createAsaasMutationTools(
           runtimeMode,
           toolName: UPDATE_CHARGE_DUE_DATE_TOOL,
           status: "planned",
-          summary: "Alteracao de vencimento planejada; nenhum POST enviado ao Asaas.",
+          summary:
+            "Alteracao de vencimento planejada; apos aprovar, o PDF atualizado sera baixado.",
           args: params,
-          data: { approvalPreview, plannedRequest }
+          data: { approvalPreview, plannedRequest },
+          artifacts: [],
+          warnings: [],
+          responseSummary: dueDateUpdateResponseSummary(
+            params,
+            "Alteracao de vencimento planejada; apos aprovar, o PDF atualizado sera baixado."
+          )
         });
       }
 
@@ -270,17 +308,34 @@ export function createAsaasMutationTools(
       if (blocked) return blocked;
 
       const result = await options.client.updateChargeDueDate(params.chargeId, params.dueDateBr);
+      const succeeded = result.ok;
+      const pdfResult = succeeded
+        ? await resolveBoletoPdfArtifactAfterChargeUpdate({
+            client: options.client,
+            chargeId: params.chargeId,
+            operationId,
+            artifactsDir: options.artifactsDir
+          })
+        : { artifacts: [], warnings: [] as string[] };
+
+      const summary = succeeded
+        ? pdfResult.artifacts.length > 0
+          ? "Vencimento atualizado e PDF do boleto baixado."
+          : "Vencimento atualizado no Asaas."
+        : `Asaas rejeitou a alteracao com HTTP ${result.status}.`;
+
       return writeMutationReceipt({
         ledgerPath: options.ledgerPath,
         operationId,
         runtimeMode,
         toolName: UPDATE_CHARGE_DUE_DATE_TOOL,
-        status: result.ok ? "succeeded" : "failed",
-        summary: result.ok
-          ? "Vencimento atualizado no Asaas."
-          : `Asaas rejeitou a alteracao com HTTP ${result.status}.`,
+        status: succeeded ? "succeeded" : "failed",
+        summary,
         args: params,
-        data: { approvalPreview, plannedRequest, result }
+        data: { approvalPreview, plannedRequest, result, chargeLinks: pdfResult.links },
+        artifacts: pdfResult.artifacts,
+        warnings: pdfResult.warnings,
+        responseSummary: dueDateUpdateResponseSummary(params, summary)
       });
     },
 
@@ -470,32 +525,7 @@ export function createAsaasMutationTools(
         method: "GET",
         url: `${ASAAS_BASE_URL}/b/pdf/${params.externalToken}`
       };
-      const artifactPath = path.join(
-        options.artifactsDir,
-        "asaas",
-        operationId,
-        params.fileName
-      );
-      const plannedArtifact: Artifact = {
-        kind: "pdf",
-        path: artifactPath,
-        label: "boleto pdf planejado"
-      };
-
-      if (runtimeMode === "dry-run") {
-        return writeMutationReceipt({
-          ledgerPath: options.ledgerPath,
-          operationId,
-          runtimeMode,
-          toolName: DOWNLOAD_BOLETO_PDF_TOOL,
-          status: "planned",
-          summary: "Download de PDF planejado; nenhum GET enviado ao Asaas.",
-          args: params,
-          data: { plannedRequest },
-          artifacts: [plannedArtifact]
-        });
-      }
-
+      // Download de PDF é somente leitura no Asaas — sempre executa o GET real.
       const pdf = await options.client.downloadBoletoPdf(params.externalToken);
       const artifact = await saveBinaryArtifact({
         artifactsDir: options.artifactsDir,
@@ -716,6 +746,66 @@ async function writeMutationReceipt<T>(input: {
   });
 
   return receipt;
+}
+
+function dueDateUpdateResponseSummary(
+  params: AsaasUpdateChargeDueDateParams,
+  summary = "Alteracao de vencimento planejada; apos aprovar, o PDF atualizado sera baixado."
+): Record<string, string> {
+  const output: Record<string, string> = {
+    summary,
+    chargeId: params.chargeId,
+    dueDateBr: params.dueDateBr
+  };
+  if (params.customerName) output.customerName = params.customerName;
+  return output;
+}
+
+async function resolveBoletoPdfArtifactAfterChargeUpdate(input: {
+  client: AsaasMutationClient;
+  chargeId: string;
+  operationId: string;
+  artifactsDir: string;
+}): Promise<{
+  links?: ChargeLinks;
+  artifacts: Artifact[];
+  warnings: string[];
+}> {
+  try {
+    const html = await input.client.getChargeDetailHtml(input.chargeId);
+    const links = parseChargeLinksFromHtml(html, input.chargeId);
+    const token = links.externalToken;
+    if (!token) {
+      return {
+        links,
+        artifacts: [],
+        warnings: ["Nao foi possivel obter o link do boleto apos a alteracao."]
+      };
+    }
+
+    const fileName = `boleto_${input.chargeId}.pdf`;
+    const pdf = await input.client.downloadBoletoPdf(token);
+    const artifact = await saveBinaryArtifact({
+      artifactsDir: input.artifactsDir,
+      provider: "asaas",
+      operationId: input.operationId,
+      label: "boleto pdf atualizado",
+      fileName,
+      kind: "pdf",
+      contents: pdf
+    });
+
+    return { links, artifacts: [artifact], warnings: [] };
+  } catch (error) {
+    return {
+      artifacts: [],
+      warnings: [
+        error instanceof Error
+          ? `Falha ao baixar PDF do boleto: ${error.message}`
+          : "Falha ao baixar PDF do boleto."
+      ]
+    };
+  }
 }
 
 function boletoChargePayload(input: CreateBoletoChargeInput): Record<string, string> {

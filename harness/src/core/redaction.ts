@@ -1,7 +1,19 @@
-const SECRET_PLACEHOLDER = "[REDACTED_SECRET]";
-const EMAIL_PLACEHOLDER = "[REDACTED_EMAIL]";
-const PHONE_PLACEHOLDER = "[REDACTED_PHONE]";
-const DOCUMENT_PLACEHOLDER = "[REDACTED_DOCUMENT]";
+export const REDACTED_PLACEHOLDERS = [
+  "[REDACTED_SECRET]",
+  "[REDACTED_EMAIL]",
+  "[REDACTED_PHONE]",
+  "[REDACTED_DOCUMENT]"
+] as const;
+
+const SECRET_PLACEHOLDER = REDACTED_PLACEHOLDERS[0];
+const EMAIL_PLACEHOLDER = REDACTED_PLACEHOLDERS[1];
+const PHONE_PLACEHOLDER = REDACTED_PLACEHOLDERS[2];
+const DOCUMENT_PLACEHOLDER = REDACTED_PLACEHOLDERS[3];
+
+export function isRedactedPlaceholder(value: string | undefined | null): boolean {
+  if (!value) return false;
+  return (REDACTED_PLACEHOLDERS as readonly string[]).includes(value);
+}
 
 const SENSITIVE_HEADER_NAMES = new Set([
   "cookie",

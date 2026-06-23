@@ -1,0 +1,101 @@
+/**
+ * Omie design tokens — extraídos da identidade visual pública (omie.com.br).
+ * Tipografia: Poppins. Cores: petróleo, azul, laranja, verde, roxo.
+ */
+:root {
+  /* ---- Primitivas de marca ---- */
+  --omie-petroleo: #001e27;
+  --omie-petroleo-72: rgba(0, 30, 39, 0.72);
+  --omie-petroleo-60: rgba(0, 30, 39, 0.6);
+  --omie-petroleo-40: rgba(0, 30, 39, 0.4);
+  --omie-petroleo-12: rgba(0, 30, 39, 0.12);
+  --omie-petroleo-08: rgba(0, 30, 39, 0.08);
+  --omie-petroleo-elevated: #0a2f3a;
+
+  --omie-azul: #00e2f4;
+  --omie-azul-soft: rgba(0, 226, 244, 0.12);
+  --omie-azul-muted: rgba(0, 226, 244, 0.55);
+
+  --omie-laranja: #ff601f;
+  --omie-laranja-dark: #e55212;
+  --omie-laranja-soft: rgba(255, 96, 31, 0.14);
+  --omie-laranja-glow: rgba(255, 96, 31, 0.36);
+
+  --omie-verde: #d8fe00;
+  --omie-verde-soft: rgba(216, 254, 0, 0.2);
+  --omie-verde-text: #3d5c00;
+
+  --omie-roxo: #5e16ff;
+
+  --omie-cinza-50: #f7f7f7;
+  --omie-cinza-100: #eceeee;
+  --omie-cinza-200: #dedede;
+  --omie-branco: #ffffff;
+
+  /* ---- Tipografia ---- */
+  --omie-font-family: "Poppins", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --omie-font-weight-regular: 400;
+  --omie-font-weight-medium: 500;
+  --omie-font-weight-semibold: 600;
+  --omie-font-weight-bold: 700;
+  --omie-font-weight-extrabold: 800;
+
+  --omie-text-xs: 11px;
+  --omie-text-sm: 12px;
+  --omie-text-md: 13px;
+  --omie-text-base: 14px;
+  --omie-text-lg: 18px;
+  --omie-text-xl: 24px;
+  --omie-text-2xl: 30px;
+  --omie-text-3xl: 32px;
+
+  --omie-leading-tight: 1.15;
+  --omie-leading-normal: 1.5;
+
+  /* ---- Semânticas (Confere) ---- */
+  --color-bg-app: var(--omie-cinza-50);
+  --color-bg-surface: var(--omie-branco);
+  --color-bg-muted: var(--omie-cinza-100);
+  --color-bg-rail: var(--omie-petroleo);
+  --color-bg-rail-active: var(--omie-petroleo-elevated);
+
+  --color-text-primary: var(--omie-petroleo);
+  --color-text-secondary: var(--omie-petroleo-60);
+  --color-text-muted: var(--omie-petroleo-40);
+  --color-text-on-dark: var(--omie-branco);
+  --color-text-on-dark-muted: var(--omie-petroleo-72);
+
+  --color-brand: var(--omie-laranja);
+  --color-brand-dark: var(--omie-laranja-dark);
+  --color-accent: var(--omie-azul);
+
+  --color-border: var(--omie-petroleo-12);
+  --color-border-strong: var(--omie-petroleo-40);
+
+  --color-primary: var(--omie-petroleo);
+  --color-primary-hover: var(--omie-petroleo-elevated);
+  --color-primary-on: var(--omie-branco);
+
+  --color-link: var(--omie-petroleo);
+  --color-link-hover: var(--omie-laranja);
+
+  --color-success-bg: #e8f9ee;
+  --color-success-text: #14663a;
+  --color-warn-bg: #fff4e8;
+  --color-warn-text: #b34e00;
+  --color-danger-bg: #ffe8e8;
+  --color-danger-text: #a52828;
+  --color-info-bg: var(--omie-azul-soft);
+  --color-info-text: #007a86;
+
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 18px;
+  --radius-pill: 999px;
+
+  --shadow-soft: 0 12px 32px rgba(0, 30, 39, 0.06);
+  --shadow-card: 0 18px 48px rgba(0, 30, 39, 0.1);
+  --shadow-rail-tooltip: 0 12px 30px rgba(0, 30, 39, 0.18);
+  --shadow-brand: 0 8px 18px var(--omie-laranja-glow);
+}

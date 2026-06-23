@@ -11,6 +11,7 @@ import {
 } from "../modules/contaazul/tools.js";
 import { createContaAzulWorkflowTools } from "../modules/contaazul/workflows.js";
 import type { HarnessConfig } from "./config.js";
+import { resolveProjectRoot } from "./project-root.js";
 import {
   checkContaAzulSessionState,
   loadBrowserState
@@ -23,9 +24,7 @@ export type RuntimeRegistryResult = {
 };
 
 export function resolveConfigCwd(cwd = process.cwd()): string {
-  return path.basename(cwd).toLowerCase() === "harness"
-    ? path.resolve(cwd, "..")
-    : cwd;
+  return resolveProjectRoot(cwd);
 }
 
 export async function createDefaultMappedToolRegistry(

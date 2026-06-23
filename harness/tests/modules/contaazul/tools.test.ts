@@ -250,7 +250,7 @@ describe("Conta Azul read tools", () => {
     const receipt = await tools.searchFinancialStatement({ relationId: "rel_001" });
 
     expect(receipt.status).toBe("blocked");
-    expect(receipt.warnings.join(" ")).toContain("node contaazul/capture.js");
+    expect(receipt.warnings.join(" ")).toContain("renew-session.cjs contaazul");
   });
 });
 
@@ -795,7 +795,7 @@ describe("Conta Azul mutation tools", () => {
     });
 
     expect(receipt.status).toBe("blocked");
-    expect(receipt.warnings.join(" ")).toContain("node contaazul/capture.js");
+    expect(receipt.warnings.join(" ")).toContain("renew-session.cjs contaazul");
     expect(base.calls.map((call: any) => call.name)).toEqual([
       "getPersonDetails",
       "getCompanyDetails"
@@ -1316,6 +1316,18 @@ function createFakeClient(options: {
     },
     async searchServiceItems(params: unknown) {
       client.lookupCalls.push({ name: "searchServiceItems", payload: params });
+      return [{ id: "item_1", name: "Honorário Contábil" }];
+    },
+    async listSaleCustomers(params: unknown) {
+      client.lookupCalls.push({ name: "listSaleCustomers", payload: params });
+      return [{ id: "cust_1", name: "AZUOS ASSESSORIA CONTÁBIL LTDA" }];
+    },
+    async listFinancialCategories(params: unknown) {
+      client.lookupCalls.push({ name: "listFinancialCategories", payload: params });
+      return [{ uuid: "cat_1", dsNaturezaFinanceira: "Honorário contábil mensal" }];
+    },
+    async listServiceItems(params: unknown) {
+      client.lookupCalls.push({ name: "listServiceItems", payload: params });
       return [{ id: "item_1", name: "Honorário Contábil" }];
     },
     async getPersonDetails(params: unknown) {

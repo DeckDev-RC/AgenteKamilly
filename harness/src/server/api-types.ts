@@ -1,7 +1,27 @@
+import type { ConnectionHealth } from "../core/connection-health.js";
 import type { OperationSummary } from "../core/operation-summary.js";
 import type { OperationStatus, Provider, RuntimeMode } from "../core/tool-types.js";
 
+export type { ConnectionHealth, ConnectionStatus } from "../core/connection-health.js";
+
 export type ConfereModule = "home" | "contaazul" | "asaas" | "operacoes" | "sessoes";
+
+export type CheckConnectionsApiResponse = {
+  status: "ok";
+  connections: ConnectionHealth[];
+};
+
+export type RenewProvider = "asaas" | "contaazul";
+
+/** Eventos emitidos pelo processo de renovação (captura) para a UI. */
+export type RenewEvent =
+  | { provider: RenewProvider; type: "log"; line: string }
+  | { provider: RenewProvider; type: "ready" }
+  | { provider: RenewProvider; type: "done"; ok: boolean; detail?: string };
+
+export type RenewStartApiResponse =
+  | { status: "started" }
+  | { status: "unavailable"; reason: string };
 
 export type ConfereStatus = {
   appName: "Confere";
@@ -57,6 +77,12 @@ export type AgentResultView = {
   choices?: AgentChoiceView[];
   fieldName?: string;
   receiptData?: unknown;
+  /** Formulário embutido no chat (ex.: dados da cobrança após seleções). */
+  formId?: string;
+  formDefaults?: Record<string, string>;
+  formContext?: Record<string, string>;
+  /** Opções para campos select do formulário embutido (ex.: categoria, item). */
+  formChoices?: Record<string, AgentChoiceView[]>;
 };
 
 export type AgentChoiceView = {

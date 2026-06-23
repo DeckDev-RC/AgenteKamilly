@@ -21,7 +21,7 @@ export function SlimRail(props: {
     <div className="app-shell">
       <aside className="rail" aria-label="Confere navegação principal">
         <div className="rail__pixelyn">
-          <PixelynAvatar state={props.pixelynState} size={40} />
+          <PixelynAvatar context="rail" state={props.pixelynState} />
           <span className="rail__alive">Confere</span>
         </div>
         <nav className="rail__nav">
@@ -37,12 +37,20 @@ export function SlimRail(props: {
                 title={dest.label}
                 type="button"
               >
-                <Icon aria-hidden="true" size={18} />
-                <span className="rail__label">{dest.label}</span>
+                <span className="rail__item-icon" aria-hidden="true">
+                  <Icon size={18} />
+                </span>
+                <span className="rail__item-text">{dest.label}</span>
               </button>
             );
           })}
         </nav>
+        <div className="rail__footer">
+          <span className="rail__status">
+            <span className="rail__status-dot" aria-hidden="true" />
+            online
+          </span>
+        </div>
       </aside>
       <main className="main-surface">{props.children}</main>
     </div>

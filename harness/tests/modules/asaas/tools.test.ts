@@ -143,6 +143,35 @@ describe("Asaas read tools", () => {
     expect(client.chargePageRequests).toEqual([{ customerId: "101", offset: 0, max: 100 }]);
   });
 
+  it("lists all boleto charges regardless of status", async () => {
+    const ledgerPath = await tempLedgerPath();
+    const chargeFixture = JSON.parse(
+      readFileSync(path.join(fixturesDir, "pending-charges.json"), "utf-8")
+    ) as { content: string };
+    const client = createFakeClient({
+      chargePages: [chargeFixture.content]
+    });
+
+    const tools = createAsaasReadTools({
+      client,
+      ledgerPath,
+      operationIdFactory: () => "op_all_charges"
+    });
+
+    const receipt = await tools.listCharges({
+      customerId: "101",
+      statusFilter: "all",
+      billingType: "boleto"
+    });
+
+    expect(receipt.status).toBe("succeeded");
+    expect(receipt.data).toHaveLength(2);
+    expect(receipt.data?.[1]).toMatchObject({
+      id: "502",
+      status: "Recebida"
+    });
+  });
+
   it("extracts charge boleto links", async () => {
     const ledgerPath = await tempLedgerPath();
     const html = readFileSync(path.join(fixturesDir, "charge-show.html"), "utf-8");
@@ -172,11 +201,13 @@ describe("Asaas read tools", () => {
   it("plans a due date update in dry-run without calling the mapped POST", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "harness-asaas-mutation-"));
     const ledgerPath = path.join(dir, "ledger", "operations.jsonl");
-    const client = createFakeClient({});
+    const artifactsDir = path.join(dir, "artifacts");
+    const chargeHtml = readFileSync(path.join(fixturesDir, "charge-show.html"), "utf-8");
+    const client = createFakeClient({ chargeHtmlById: { "501": chargeHtml } });
     const tools = createAsaasMutationTools({
       client,
       ledgerPath,
-      artifactsDir: path.join(dir, "artifacts"),
+      artifactsDir,
       runtimeMode: "dry-run",
       allowLiveMutations: false,
       operationIdFactory: () => "op_update_due_date"
@@ -188,6 +219,7 @@ describe("Asaas read tools", () => {
     });
 
     expect(receipt.status).toBe("planned");
+    expect(receipt.summary).toContain("PDF atualizado");
     expect(receipt.data?.approvalPreview).toMatchObject({
       operationId: "op_update_due_date",
       provider: "asaas",
@@ -201,7 +233,9 @@ describe("Asaas read tools", () => {
       url: "https://www.asaas.com/payment/update",
       payload: { id: "501", dueDate: "25/07/2026" }
     });
+    expect(receipt.artifacts).toEqual([]);
     expect(client.updateChargeDueDateCalls).toEqual([]);
+    expect(client.downloadBoletoPdfCalls).toEqual([]);
   });
 
   it("blocks a live due date update without exact approval", async () => {
@@ -230,11 +264,13 @@ describe("Asaas read tools", () => {
   it("executes a live due date update only with exact approval", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "harness-asaas-mutation-"));
     const ledgerPath = path.join(dir, "ledger", "operations.jsonl");
-    const client = createFakeClient({});
+    const artifactsDir = path.join(dir, "artifacts");
+    const chargeHtml = readFileSync(path.join(fixturesDir, "charge-show.html"), "utf-8");
+    const client = createFakeClient({ chargeHtmlById: { "501": chargeHtml } });
     const tools = createAsaasMutationTools({
       client,
       ledgerPath,
-      artifactsDir: path.join(dir, "artifacts"),
+      artifactsDir,
       runtimeMode: "live",
       allowLiveMutations: true,
       operationIdFactory: () => "op_update_due_date"
@@ -247,9 +283,17 @@ describe("Asaas read tools", () => {
     });
 
     expect(receipt.status).toBe("succeeded");
+    expect(receipt.summary).toContain("PDF");
     expect(client.updateChargeDueDateCalls).toEqual([
       { chargeId: "501", dueDateBr: "25/07/2026" }
     ]);
+    expect(client.downloadBoletoPdfCalls).toEqual(["tok_test_123"]);
+    expect(receipt.artifacts[0]).toMatchObject({
+      kind: "pdf",
+      path: path.join(artifactsDir, "asaas", "op_update_due_date", "boleto_501.pdf"),
+      label: "boleto pdf atualizado"
+    });
+    await expect(readFile(receipt.artifacts[0]!.path)).resolves.toEqual(Buffer.from("%PDF-test"));
   });
 
   it("plans boleto creation in dry-run without calling the mapped POST", async () => {
@@ -389,13 +433,13 @@ describe("Asaas read tools", () => {
       fileName: "boleto_501.pdf"
     });
 
-    expect(receipt.status).toBe("planned");
+    expect(receipt.status).toBe("succeeded");
     expect(receipt.artifacts[0]).toMatchObject({
       kind: "pdf",
       path: path.join(artifactsDir, "asaas", "op_download_pdf", "boleto_501.pdf"),
-      label: "boleto pdf planejado"
+      label: "boleto pdf"
     });
-    expect(client.downloadBoletoPdfCalls).toEqual([]);
+    expect(client.downloadBoletoPdfCalls).toEqual(["tok_test_123"]);
   });
 
   it("downloads boleto PDF in live mode and stores it as an artifact", async () => {
