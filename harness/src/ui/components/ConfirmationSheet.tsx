@@ -12,13 +12,20 @@ export function ConfirmationSheet(props: {
 }): ReactElement | null {
   if (!props.open || !props.sheet) return null;
 
+  const isCreateCustomer = props.sheet.toolName === "contaazul.create_customer_workflow";
+  const isDueDateUpdate = props.sheet.toolName === "contaazul.update_due_date_reissue_boleto_workflow";
+
   return (
     <div className="modal-backdrop" role="presentation">
       <section aria-modal="true" className="confirmation-sheet" role="dialog">
         <header>
           <p className="eyebrow">Aprovação final</p>
-          <h2>Confirmar execução real</h2>
-          <p>Revise os dados antes de autorizar a mutação no provedor.</p>
+          <h2>{isCreateCustomer ? "Confirmar cadastro de cliente" : "Confirmar execução real"}</h2>
+          <p>
+            {isCreateCustomer
+              ? "Revise os dados do cliente antes de autorizar o cadastro no Conta Azul."
+              : "Revise os dados antes de autorizar a mutação no provedor."}
+          </p>
         </header>
         <dl className="summary-list">
           <div>
@@ -82,15 +89,24 @@ export function ConfirmationSheet(props: {
         {props.busy ? (
           <div className="confirmation-sheet__progress">
             <p>
-              Emitindo venda e aguardando o boleto no Conta Azul. Isso pode levar até 2 minutos —
-              não feche esta janela.
+              {isCreateCustomer
+                ? "Cadastrando o cliente no Conta Azul. Isso pode levar alguns segundos — não feche esta janela."
+                : isDueDateUpdate
+                  ? "Alterando o vencimento no Conta Azul. Aguarde a conclusão — não feche esta janela."
+                  : "Emitindo venda e aguardando o boleto no Conta Azul. Isso pode levar até 2 minutos — não feche esta janela."}
             </p>
           </div>
         ) : null}
         <footer className="confirmation-actions">
           <ActionButton disabled={props.busy} onClick={props.onCancel}>Cancelar</ActionButton>
           <ActionButton disabled={props.busy} onClick={props.onConfirm} variant="danger">
-            {props.busy ? "Emitindo boleto…" : "Aprovar execução real"}
+            {props.busy
+              ? isCreateCustomer
+                ? "Cadastrando cliente…"
+                : "Emitindo boleto…"
+              : isCreateCustomer
+                ? "Aprovar cadastro"
+                : "Aprovar execução real"}
           </ActionButton>
         </footer>
       </section>

@@ -148,3 +148,70 @@ export type OperationSummaryApiResponse = {
   status: "ok";
   operation: OperationSummary;
 };
+
+export type AppSettingsView = {
+  envPath: string;
+  allowLiveMutations: boolean;
+  geminiApiKeyConfigured: boolean;
+  geminiApiKeyHint?: string;
+};
+
+export type UpdateAppSettingsRequest = {
+  allowLiveMutations?: boolean;
+  geminiApiKey?: string;
+};
+
+export type UpdateAppSettingsResponse = {
+  status: "ok";
+  settings: AppSettingsView;
+};
+
+export type ConversationSummaryView = {
+  id: string;
+  title: string;
+  updatedAt: string;
+  preview: string;
+  messageCount: number;
+};
+
+export type ConversationListApiResponse = {
+  status: "ok";
+  conversations: ConversationSummaryView[];
+};
+
+export type StoredConversationView = {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  messages: Array<
+    | {
+        id: string;
+        role: "user";
+        text: string;
+        timestamp: string;
+      }
+    | {
+        id: string;
+        role: "assistant";
+        result: AgentResultView;
+        draftOperationId?: string;
+        timestamp: string;
+      }
+  >;
+};
+
+export type ConversationGetApiResponse =
+  | { status: "ok"; conversation: StoredConversationView }
+  | { status: "not_found" };
+
+export type ConversationSaveApiRequest = StoredConversationView;
+
+export type ConversationSaveApiResponse = {
+  status: "ok";
+  conversation: ConversationSummaryView;
+};
+
+export type ConversationDeleteApiResponse = {
+  status: "ok" | "not_found";
+};

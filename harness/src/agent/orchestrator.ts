@@ -23,6 +23,8 @@ import {
   ContaAzulCreateCustomerWorkflowParamsSchema,
   ContaAzulCreateServiceSaleAndIssueBoletoParamsSchema,
   ContaAzulGetPersonDetailsParamsSchema,
+  ContaAzulLookupCepParamsSchema,
+  ContaAzulLookupCnpjParamsSchema,
   ContaAzulSearchFinancialCategoriesParamsSchema,
   ContaAzulSearchFinancialStatementParamsSchema,
   ContaAzulSearchSaleCustomersParamsSchema,
@@ -180,6 +182,20 @@ export function registerHarnessTools(registry: ToolRegistry, toolset: HarnessToo
     "contaazul.get_person_details",
     "Load Conta Azul Pro person details for billing defaults.",
     ContaAzulGetPersonDetailsParamsSchema
+  );
+  registerIfPresent(
+    registry,
+    toolset.contaAzulRead?.lookupCnpj,
+    "contaazul.lookup_cnpj",
+    "Lookup Conta Azul company data by CNPJ for customer prefill.",
+    ContaAzulLookupCnpjParamsSchema
+  );
+  registerIfPresent(
+    registry,
+    toolset.contaAzulRead?.lookupCep,
+    "contaazul.lookup_cep",
+    "Lookup Conta Azul address data by CEP for customer prefill.",
+    ContaAzulLookupCepParamsSchema
   );
   registerIfPresent(
     registry,

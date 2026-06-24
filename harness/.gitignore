@@ -15,3 +15,6 @@ dist-electron/
 out/
 coverage/
 .superpowers/
+release/
+dist-installer/
+dist-installer/

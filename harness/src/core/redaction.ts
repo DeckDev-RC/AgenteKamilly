@@ -15,6 +15,17 @@ export function isRedactedPlaceholder(value: string | undefined | null): boolean
   return (REDACTED_PLACEHOLDERS as readonly string[]).includes(value);
 }
 
+export function sanitizeFormDefaultValues(
+  values: Record<string, string | undefined>
+): Record<string, string> {
+  const output: Record<string, string> = {};
+  for (const [key, value] of Object.entries(values)) {
+    if (!value?.trim() || isRedactedPlaceholder(value)) continue;
+    output[key] = value.trim();
+  }
+  return output;
+}
+
 const SENSITIVE_HEADER_NAMES = new Set([
   "cookie",
   "authorization",

@@ -9,6 +9,8 @@ export type PlanFacts = {
   value?: string;
   dueDate?: string;
   action?: string;
+  document?: string;
+  personType?: string;
 };
 
 export function PlanCard(props: {
@@ -20,6 +22,8 @@ export function PlanCard(props: {
   const [showDetail, setShowDetail] = useState(false);
   const rows: Array<[string, string | undefined]> = [
     ["Cliente", props.facts.customerName],
+    ["Documento", props.facts.document],
+    ["Tipo de pessoa", props.facts.personType],
     ["Valor", props.facts.value],
     ["Vencimento", props.facts.dueDate],
     ["Ação", props.facts.action]

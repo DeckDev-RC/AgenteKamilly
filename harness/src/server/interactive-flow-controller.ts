@@ -1,9 +1,15 @@
 import type { AgentChoiceView, AgentResultView } from "./api-types.js";
 import { understand, normalize, type NluEntities, type NluProvider } from "../core/nlu.js";
 import type { PreferencesStore, RememberedTenant } from "../core/preferences-store.js";
-import { isRedactedPlaceholder } from "../core/redaction.js";
+import { isRedactedPlaceholder, sanitizeFormDefaultValues } from "../core/redaction.js";
 import type { ToolRegistry } from "../core/tool-registry.js";
 import type { AccountancyClient, CustomerMatch, FinancialStatementItem, PendingCharge, ToolReceipt } from "../core/tool-types.js";
+import {
+  mergePrefillIntoFormDefaults,
+  prefillToFormDefaults,
+  prefillToWorkflowSlots,
+  type CustomerCnpjPrefill
+} from "../modules/contaazul/cnpj-prefill.js";
 
 const CONTAZUL_FLOW = "contaazul_service_sale_boleto";
 const ASAAS_FLOW = "asaas_boleto_charge";
@@ -66,11 +72,8 @@ type InteractiveFlowState = {
     | "asaasUpdateCustomerSearch"
     | "asaasUpdateChargeChoice"
     | "asaasUpdateDueDate"
-    | "caUpdateStatementSearch"
-    | "caUpdateStatementChoice"
-    | "caUpdateDueDate"
-    | "customerPersonType"
-    | "customerField"
+    | "caUpdateDetailsForm"
+    | "createCustomerDetailsForm"
     | "provider"
     | "operation";
   slots: Record<string, unknown>;
@@ -711,7 +714,7 @@ async function continueAsaasDownloadFlow(
       handled: true,
       result: promptAsaasDownloadDetailsForm(
         state,
-        "Selecione o cliente e a cobrança para baixar o PDF do boleto."
+        "Selecione o cliente. As cobranças boleto aparecem na lista abaixo."
       )
     };
   }
@@ -814,6 +817,21 @@ async function collectAsaasUpdateDueDateAndPlan(
   };
 }
 
+const CONTAZUL_PENDING_FILTER_CHOICES: AgentChoiceView[] = [
+  {
+    id: "pending:pending",
+    label: "Apenas pendentes",
+    description: "Cobranças em aberto",
+    params: { pendingOnly: "pending" }
+  },
+  {
+    id: "pending:all",
+    label: "Todas",
+    description: "Pendentes e liquidadas",
+    params: { pendingOnly: "all" }
+  }
+];
+
 async function continueContaAzulUpdateFlow(
   input: InteractiveFlowInput,
   sessionKey: string,
@@ -835,130 +853,317 @@ async function continueContaAzulUpdateFlow(
       relationId,
       tenantName: stringValue(input.params?.tenantName)
     };
-    state.step = "caUpdateStatementChoice";
     input.store.set(sessionKey, state);
-    return promptContaAzulStatements(input, state, sessionKey);
+    return transitionToContaAzulUpdateForm(input, state, sessionKey);
   }
-  if (marker.action === "select_statement") {
-    state.slots = {
-      ...state.slots,
-      financialEventId: stringValue(input.params?.financialEventId),
-      installmentId: stringValue(input.params?.installmentId)
+
+  if (marker.action === "load_contaazul_statements") {
+    return loadContaAzulStatementsIntoForm(input, state, sessionKey, asRecord(input.params));
+  }
+
+  if (marker.action === "submit_contaazul_update_details") {
+    return collectContaAzulUpdateDetailsForm(input, state, sessionKey, asRecord(input.params));
+  }
+
+  if (state.step === "caUpdateDetailsForm") {
+    return {
+      handled: true,
+      result: promptContaAzulUpdateDetailsForm(
+        state,
+        "Selecione o cliente, filtre as cobranças e informe o novo vencimento."
+      )
     };
-    state.step = "caUpdateDueDate";
-    input.store.set(sessionKey, state);
+  }
+
+  if (state.step === "tenant") return promptContaAzulTenant(input, CONTAZUL_UPDATE_FLOW);
+  return promptContaAzulTenant(input, CONTAZUL_UPDATE_FLOW);
+}
+
+async function transitionToContaAzulUpdateForm(
+  input: InteractiveFlowInput,
+  state: InteractiveFlowState,
+  sessionKey: string,
+  options?: { summary?: string }
+): Promise<InteractiveFlowResult> {
+  const relationId = stringValue(state.slots.relationId);
+  if (!relationId) {
+    return { handled: true, result: blocked("A empresa selecionada não possui relationId para buscar clientes.") };
+  }
+
+  const receipt = await executeTool<unknown[]>(input.registry, "contaazul.search_sale_customers", {
+    relationId,
+    listAll: true
+  });
+  const customers = Array.isArray(receipt.data) ? receipt.data : [];
+  if (customers.length === 0) {
     return {
       handled: true,
       result: needsInput({
         toolName: CONTAZUL_UPDATE_TOOL_NAME,
-        summary: "Lançamento selecionado.",
-        missingFields: ["dueDateBr"],
-        questions: ["Digite o novo vencimento (DD/MM/AAAA)."]
+        provider: "contaazul",
+        intent: "update_due_date_reissue_boleto",
+        summary: "Nenhum cliente encontrado nesta empresa.",
+        missingFields: ["customerId"],
+        questions: ["Nenhum cliente cadastrado."],
+        choices: []
       })
     };
   }
-  if (state.step === "tenant") return promptContaAzulTenant(input, CONTAZUL_UPDATE_FLOW);
-  if (state.step === "caUpdateStatementChoice") return promptContaAzulStatements(input, state, sessionKey);
-  if (state.step === "caUpdateDueDate") return collectContaAzulUpdateDueDateAndPlan(input, state, sessionKey);
-  return promptContaAzulTenant(input, CONTAZUL_UPDATE_FLOW);
+
+  state.formChoices = {
+    customerId: customers.map((customer) => contaazulCustomerFormChoice(customer)),
+    pendingOnly: CONTAZUL_PENDING_FILTER_CHOICES
+  };
+  state.step = "caUpdateDetailsForm";
+  input.store.set(sessionKey, state);
+
+  return {
+    handled: true,
+    result: promptContaAzulUpdateDetailsForm(
+      state,
+      options?.summary ?? "Selecione o cliente e as cobranças para alterar o vencimento."
+    )
+  };
 }
 
-async function promptContaAzulStatements(
+function promptContaAzulUpdateDetailsForm(
+  state: InteractiveFlowState,
+  summary = "Selecione o cliente e as cobranças para alterar o vencimento.",
+  partialDefaults?: Record<string, string>
+): AgentResultView {
+  const customerId = stringValue(state.slots.customerId) ?? "";
+  const customerName = stringValue(state.slots.customerName) ?? "";
+  const tenantName = stringValue(state.slots.tenantName) ?? "";
+
+  return {
+    ...needsInput({
+      toolName: CONTAZUL_UPDATE_TOOL_NAME,
+      provider: "contaazul",
+      intent: "update_due_date_reissue_boleto",
+      summary,
+      missingFields: ["customerId", "pendingOnly", "chargeIds", "dueDateBr"],
+      questions: []
+    }),
+    formId: "contaazul_update_due_date",
+    formDefaults: {
+      customerId,
+      pendingOnly: "pending",
+      chargeIds: "",
+      dueDateBr: "",
+      ...partialDefaults
+    },
+    formChoices: state.formChoices,
+    formContext: {
+      customerName,
+      tenantName
+    }
+  };
+}
+
+async function loadContaAzulStatementsIntoForm(
   input: InteractiveFlowInput,
   state: InteractiveFlowState,
-  sessionKey: string
+  sessionKey: string,
+  params: Record<string, unknown>,
+  options?: { summary?: string }
 ): Promise<InteractiveFlowResult> {
   const relationId = stringValue(state.slots.relationId);
   if (!relationId) {
     return { handled: true, result: blocked("Sessão da empresa não está ativa.") };
   }
-  const receipt = await executeTool<FinancialStatementItem[]>(
-    input.registry,
-    "contaazul.search_financial_statement",
-    { relationId }
-  );
-  const items = Array.isArray(receipt.data) ? receipt.data : [];
-  if (items.length === 0) {
-    state.step = "caUpdateStatementChoice";
-    input.store.set(sessionKey, state);
+
+  const customerId = stringValue(params.customerId) ?? stringValue(state.slots.customerId);
+  const customerName =
+    stringValue(params.customerName) ??
+    resolveChoiceLabel(state.formChoices?.customerId, "customerId", customerId) ??
+    stringValue(state.slots.customerName);
+  const pendingOnly = stringValue(params.pendingOnly) ?? "pending";
+  const onlyPending = pendingOnly !== "all";
+
+  const formDefaults = {
+    ...formDefaultsFromParams(params),
+    customerId: customerId ?? "",
+    pendingOnly,
+    chargeIds: parseChargeIds(params).join(",")
+  };
+
+  if (!customerId || !customerName) {
     return {
       handled: true,
-      result: needsInput({
-        toolName: CONTAZUL_UPDATE_TOOL_NAME,
-        summary: "Nenhum lançamento encontrado nesta empresa.",
-        missingFields: ["statementId"],
-        questions: ["Nenhum lançamento disponível para seleção."],
-        choices: []
-      })
+      result: {
+        ...promptContaAzulUpdateDetailsForm(state, "Selecione o cliente.", formDefaults),
+        formDefaults
+      }
     };
   }
-  state.step = "caUpdateStatementChoice";
+
+  if (!state.formChoices?.customerId) {
+    const customersReceipt = await executeTool<unknown[]>(input.registry, "contaazul.search_sale_customers", {
+      relationId,
+      listAll: true
+    });
+    const customers = Array.isArray(customersReceipt.data) ? customersReceipt.data : [];
+    state.formChoices = {
+      customerId: customers.map((customer) => contaazulCustomerFormChoice(customer)),
+      pendingOnly: CONTAZUL_PENDING_FILTER_CHOICES
+    };
+  }
+
+  const receipt = await executeTool<FinancialStatementItem[]>(input.registry, "contaazul.search_financial_statement", {
+    relationId,
+    query: statementSearchQueryFromCustomerName(customerName)
+  });
+  const items = Array.isArray(receipt.data) ? receipt.data : [];
+  const filtered = filterStatementItems(items, [customerName], false, onlyPending);
+
+  state.slots = {
+    ...state.slots,
+    customerId,
+    customerName
+  };
+  state.formChoices = {
+    ...state.formChoices,
+    customerId: state.formChoices?.customerId ?? [],
+    pendingOnly: state.formChoices?.pendingOnly ?? CONTAZUL_PENDING_FILTER_CHOICES,
+    chargeId: filtered.map((item) => contaazulStatementFormChoice(item))
+  };
+  state.step = "caUpdateDetailsForm";
   input.store.set(sessionKey, state);
+
+  const pendingLabel = onlyPending ? "pendente(s) " : "";
+  const summary =
+    options?.summary ??
+    (filtered.length > 0
+      ? `Encontrei ${filtered.length} cobrança(s) ${pendingLabel}para ${customerName}.`
+      : `Nenhuma cobrança ${pendingLabel}encontrada para ${customerName}.`);
+
   return {
     handled: true,
-    result: needsInput({
-      toolName: CONTAZUL_UPDATE_TOOL_NAME,
-      summary: `Encontrei ${items.length} lançamento(s).`,
-      missingFields: ["statementId"],
-      questions: ["Selecione o lançamento."],
-      choices: items.map((it) => ({
-        id: `statement:${it.installmentId ?? it.id}`,
-        label: `${it.customerName ? it.customerName + " · " : ""}${it.description}`,
-        description: `R$ ${it.value.toFixed(2).replace(".", ",")}${it.dueDateIso ? " · vence " + formatIsoToBr(it.dueDateIso) : ""}`,
-        params: {
-          __interactive: { flow: CONTAZUL_UPDATE_FLOW, action: "select_statement" },
-          financialEventId: it.financialEventId,
-          installmentId: it.installmentId ?? it.id
-        }
-      }))
-    })
+    result: {
+      ...promptContaAzulUpdateDetailsForm(state, summary, formDefaults),
+      formDefaults
+    }
   };
 }
 
-async function collectContaAzulUpdateDueDateAndPlan(
+async function collectContaAzulUpdateDetailsForm(
   input: InteractiveFlowInput,
   state: InteractiveFlowState,
-  sessionKey: string
+  sessionKey: string,
+  params: Record<string, unknown>
 ): Promise<InteractiveFlowResult> {
-  const dueDateBr = input.request.trim();
+  const customerId = stringValue(params.customerId)?.trim() ?? "";
+  const chargeIds = parseChargeIds(params);
+  const dueDateBr = stringValue(params.dueDateBr)?.trim() ?? "";
+  const pendingOnly = stringValue(params.pendingOnly) ?? "pending";
+  const customerName =
+    stringValue(params.customerName) ??
+    resolveChoiceLabel(state.formChoices?.customerId, "customerId", customerId) ??
+    stringValue(state.slots.customerName);
+
+  const formDefaults = {
+    customerId,
+    pendingOnly,
+    chargeIds: chargeIds.join(","),
+    dueDateBr
+  };
+
+  if (!customerId) {
+    return {
+      handled: true,
+      result: {
+        ...promptContaAzulUpdateDetailsForm(state, "Selecione o cliente.", formDefaults),
+        formDefaults
+      }
+    };
+  }
+
+  if (chargeIds.length === 0) {
+    return loadContaAzulStatementsIntoForm(input, state, sessionKey, params, {
+      summary: "Selecione ao menos uma cobrança."
+    });
+  }
+
   if (!isValidDateBr(dueDateBr)) {
     return {
       handled: true,
-      result: needsInput({
-        toolName: CONTAZUL_UPDATE_TOOL_NAME,
-        summary: "Data inválida.",
-        missingFields: ["dueDateBr"],
-        questions: ["Digite o novo vencimento no formato DD/MM/AAAA."]
-      })
+      result: {
+        ...promptContaAzulUpdateDetailsForm(state, "Data inválida. Use DD/MM/AAAA.", formDefaults),
+        formDefaults
+      }
     };
   }
+
   input.store.delete(sessionKey);
   const [d, m, y] = dueDateBr.split("/");
-  const params = {
-    tenantId: state.slots.tenantId,
-    financialEventId: state.slots.financialEventId,
-    installmentId: state.slots.installmentId,
-    dueDateIso: `${y}-${m}-${d}`
-  };
-  const receipt = await executeTool<unknown>(input.registry, "contaazul.update_due_date_reissue_boleto_workflow", params);
-  const operationId = operationIdFromReceipt(receipt);
+  const dueDateIso = `${y}-${m}-${d}`;
+
+  const receipts = [];
+  const drafts: OperationDraftPayload[] = [];
+  for (const chargeId of chargeIds) {
+    const statement = resolveStatementFromFormChoices(state.formChoices?.chargeId, chargeId);
+    if (!statement) continue;
+
+    const choice = state.formChoices?.chargeId?.find(
+      (item) => stringValue(item.params?.chargeId) === chargeId
+    );
+    const workflowParams = {
+      tenantId: state.slots.tenantId,
+      financialEventId: statement.financialEventId,
+      installmentId: statement.installmentId,
+      dueDateIso
+    };
+    const receipt = await executeTool<unknown>(
+      input.registry,
+      "contaazul.update_due_date_reissue_boleto_workflow",
+      workflowParams
+    );
+    receipts.push(receipt);
+    if (receipt.status !== "planned") continue;
+
+    const operationId = operationIdFromReceipt(receipt);
+    drafts.push({
+      operationId,
+      toolName: receipt.toolName,
+      params: {
+        ...workflowParams,
+        customerName,
+        tenantName: stringValue(state.slots.tenantName),
+        chargeLabel: stringValue(choice?.label)
+      }
+    });
+  }
+
+  const firstDraft = drafts[0];
+  const firstReceipt = receipts.find((receipt) => receipt.status === "planned") ?? receipts[receipts.length - 1];
+  const operationId = firstDraft?.operationId;
+  const allPlanned = receipts.length > 0 && receipts.every((receipt) => receipt.status === "planned");
+  const who = customerName ? ` de ${customerName}` : "";
+  const summary =
+    chargeIds.length > 1 && allPlanned
+      ? `${chargeIds.length} alterações preparadas (dry-run). Revise e aprove cada operação em Operações.`
+      : firstDraft
+        ? `Dry-run concluído${who}. Revise e aprove para alterar o vencimento para ${dueDateBr} e baixar o PDF do boleto.`
+        : receipts[receipts.length - 1]?.summary ?? "Alteração concluída.";
+
   return {
     handled: true,
-    draftOperationId: receipt.status === "planned" ? operationId : undefined,
-    draft: receipt.status === "planned" ? { operationId, toolName: receipt.toolName, params } : undefined,
+    draftOperationId: firstDraft ? operationId : undefined,
+    draft: firstDraft,
+    drafts: drafts.length > 0 ? drafts : undefined,
     result: {
       status: "executed",
       provider: "contaazul",
       intent: "update_due_date_reissue_boleto",
-      toolName: receipt.toolName,
+      toolName: firstDraft?.toolName ?? receipts[receipts.length - 1]?.toolName ?? CONTAZUL_UPDATE_TOOL_NAME,
       operationId,
-      receiptStatus: receipt.status,
-      summary: receipt.status === "planned" ? "Dry-run concluído. Revise os dados e aprove para emitir o boleto de verdade." : receipt.summary,
+      receiptStatus: firstReceipt?.status,
+      summary,
       missingFields: [],
       questions: [],
-      warnings: receipt.warnings,
-      approvalAvailable: receipt.status === "planned",
-      receiptData: receipt.data
+      warnings: receipts.flatMap((receipt) => receipt.warnings ?? []),
+      approvalAvailable: Boolean(firstDraft),
+      receiptData: receipts.length === 1 ? receipts[0]?.data : receipts.map((receipt) => receipt.data)
     }
   };
 }
@@ -968,25 +1173,20 @@ function formatIsoToBr(iso: string): string {
   return parts.length === 3 ? `${parts[2]}/${parts[1]}/${parts[0]}` : iso;
 }
 
-const CUSTOMER_FIELDS: { key: string; question: string; required: boolean; onlyIf?: "Jurídica" }[] = [
-  { key: "document", question: "Informe o CPF (Física) ou CNPJ (Jurídica).", required: true },
-  { key: "companyName", question: "Qual a razão social?", required: true, onlyIf: "Jurídica" },
-  { key: "name", question: "Qual o nome completo (ou nome fantasia)?", required: true },
-  { key: "email", question: "Qual o e-mail do cliente? (ou 'pular')", required: false },
-  { key: "cellPhone", question: "Qual o celular com DDD? (ou 'pular')", required: false },
-  { key: "commercialPhone", question: "Qual o telefone comercial? (ou 'pular')", required: false },
-  { key: "zipcode", question: "Qual o CEP? (ou 'pular')", required: false },
-  { key: "street", question: "Qual a rua/avenida? (ou 'pular')", required: false },
-  { key: "numberAddress", question: "Qual o número? (ou 'pular')", required: false },
-  { key: "neighborhood", question: "Qual o bairro? (ou 'pular')", required: false },
-  { key: "complement", question: "Qual o complemento? (ou 'pular')", required: false },
-  { key: "billingEmail", question: "Qual o e-mail de cobrança?", required: true },
-  { key: "billingPhone", question: "Qual o telefone de cobrança?", required: true }
+const CUSTOMER_PERSON_TYPE_CHOICES: AgentChoiceView[] = [
+  {
+    id: "person:fisica",
+    label: "Física",
+    description: "Pessoa física (CPF)",
+    params: { personType: "Física" }
+  },
+  {
+    id: "person:juridica",
+    label: "Jurídica",
+    description: "Pessoa jurídica (CNPJ)",
+    params: { personType: "Jurídica" }
+  }
 ];
-
-function customerFieldsFor(personType: string): typeof CUSTOMER_FIELDS {
-  return CUSTOMER_FIELDS.filter((field) => !field.onlyIf || field.onlyIf === personType);
-}
 
 async function continueContaAzulCreateCustomerFlow(
   input: InteractiveFlowInput,
@@ -1009,39 +1209,14 @@ async function continueContaAzulCreateCustomerFlow(
       relationId,
       tenantName: stringValue(input.params?.tenantName)
     };
-    // Se a NLU já inferiu o tipo de pessoa (via CPF/CNPJ), pula a pergunta.
-    if (stringValue(state.slots.personType)) {
-      return beginCustomerFields(input, state, sessionKey);
+    if (stringValue(input.params?.personType)) {
+      state.slots.personType = input.params?.personType;
     }
-    state.step = "customerPersonType";
-    input.store.set(sessionKey, state);
-    return {
-      handled: true,
-      result: needsInput({
-        toolName: CONTAZUL_CREATE_CUSTOMER_TOOL_NAME,
-        summary: "Empresa selecionada.",
-        missingFields: ["personType"],
-        questions: ["O cliente é Pessoa Física ou Jurídica?"],
-        choices: [
-          {
-            id: "person:fisica",
-            label: "Física",
-            params: {
-              __interactive: { flow: CONTAZUL_CREATE_CUSTOMER_FLOW, action: "select_person_type" },
-              personType: "Física"
-            }
-          },
-          {
-            id: "person:juridica",
-            label: "Jurídica",
-            params: {
-              __interactive: { flow: CONTAZUL_CREATE_CUSTOMER_FLOW, action: "select_person_type" },
-              personType: "Jurídica"
-            }
-          }
-        ]
-      })
-    };
+    return transitionToCreateCustomerForm(input, state, sessionKey, {
+      summary: stringValue(state.slots.suggestedName)
+        ? `Vamos cadastrar "${stringValue(state.slots.suggestedName)}". Preencha os dados abaixo.`
+        : `Empresa ${stringValue(state.slots.tenantName) ?? ""} selecionada. Preencha os dados do cliente.`
+    });
   }
   if (marker.action === "select_person_type") {
     const personType = stringValue(input.params?.personType);
@@ -1052,83 +1227,182 @@ async function continueContaAzulCreateCustomerFlow(
       };
     }
     state.slots = { ...state.slots, personType };
-    return beginCustomerFields(input, state, sessionKey);
+    input.store.set(sessionKey, state);
+    return transitionToCreateCustomerForm(input, state, sessionKey);
+  }
+  if (marker.action === "lookup_cnpj") {
+    return loadCnpjIntoCreateCustomerForm(input, state, sessionKey, asRecord(input.params));
+  }
+  if (marker.action === "submit_create_customer_details") {
+    return collectCreateCustomerDetailsForm(input, state, sessionKey, asRecord(input.params));
+  }
+  if (state.step === "createCustomerDetailsForm") {
+    return {
+      handled: true,
+      result: promptCreateCustomerDetailsForm(state)
+    };
   }
   if (state.step === "tenant") return promptContaAzulTenant(input, CONTAZUL_CREATE_CUSTOMER_FLOW);
-  if (state.step === "customerField") return collectCustomerField(input, state, sessionKey);
   return promptContaAzulTenant(input, CONTAZUL_CREATE_CUSTOMER_FLOW);
 }
 
-function beginCustomerFields(
+async function transitionToCreateCustomerForm(
   input: InteractiveFlowInput,
   state: InteractiveFlowState,
-  sessionKey: string
-): InteractiveFlowResult {
-  // Aproveita um nome citado em linguagem natural para pular o campo "name".
+  sessionKey: string,
+  options?: { summary?: string }
+): Promise<InteractiveFlowResult> {
   const suggested = stringValue(state.slots.suggestedName);
   if (suggested && !stringValue(state.slots.name)) {
     state.slots = { ...state.slots, name: suggested };
   }
-  state.step = "customerField";
-  const fields = customerFieldsFor(String(state.slots.personType));
-  const index = firstUnfilledFieldIndex(fields, state.slots, 0);
-  state.slots = { ...state.slots, fieldIndex: index };
+  state.formChoices = {
+    personType: CUSTOMER_PERSON_TYPE_CHOICES
+  };
+  state.step = "createCustomerDetailsForm";
   input.store.set(sessionKey, state);
-  return askCustomerField(state, index);
-}
-
-function firstUnfilledFieldIndex(
-  fields: { key: string }[],
-  slots: Record<string, unknown>,
-  from: number
-): number {
-  for (let i = Math.max(0, from); i < fields.length; i++) {
-    const value = slots[fields[i]!.key];
-    if (value === undefined || value === null || value === "") return i;
-  }
-  return fields.length;
-}
-
-function askCustomerField(state: InteractiveFlowState, index: number): InteractiveFlowResult {
-  const fields = customerFieldsFor(String(state.slots.personType));
-  const field = fields[index]!;
   return {
     handled: true,
-    result: needsInput({
-      toolName: CONTAZUL_CREATE_CUSTOMER_TOOL_NAME,
-      summary: "Cadastro de cliente.",
-      missingFields: [field.key],
-      questions: [field.question]
-    })
+    result: promptCreateCustomerDetailsForm(
+      state,
+      options?.summary ??
+        (suggested
+          ? `Vamos cadastrar "${suggested}". Preencha os dados abaixo.`
+          : "Preencha os dados do novo cliente.")
+    )
   };
 }
 
-async function collectCustomerField(
+function promptCreateCustomerDetailsForm(
+  state: InteractiveFlowState,
+  summary?: string,
+  partialDefaults?: Record<string, string>
+): AgentResultView {
+  const tenantName = stringValue(state.slots.tenantName) ?? "";
+  const suggestedName = stringValue(state.slots.suggestedName) ?? "";
+  const personType = stringValue(state.slots.personType) ?? "";
+
+  return {
+    ...needsInput({
+      toolName: CONTAZUL_CREATE_CUSTOMER_TOOL_NAME,
+      provider: "contaazul",
+      intent: "create_customer",
+      summary:
+        summary ??
+        (tenantName
+          ? `Cadastro de cliente em ${tenantName}.`
+          : "Cadastro de cliente no Conta Azul."),
+      missingFields: [
+        "personType",
+        "document",
+        "name",
+        "billingEmail",
+        "billingPhone"
+      ],
+      questions: []
+    }),
+    formId: "contaazul_create_customer_details",
+    formDefaults: {
+      personType,
+      document: stringValue(state.slots.document) ?? "",
+      name: stringValue(state.slots.name) ?? suggestedName,
+      companyName: stringValue(state.slots.companyName) ?? "",
+      email: stringValue(state.slots.email) ?? "",
+      cellPhone: stringValue(state.slots.cellPhone) ?? "",
+      billingEmail: stringValue(state.slots.billingEmail) ?? "",
+      billingPhone: stringValue(state.slots.billingPhone) ?? "",
+      zipcode: stringValue(state.slots.zipcode) ?? "",
+      numberAddress: stringValue(state.slots.numberAddress) ?? "",
+      ...partialDefaults
+    },
+    formChoices: state.formChoices,
+    formContext: {
+      tenantName,
+      customerName: suggestedName
+    }
+  };
+}
+
+async function collectCreateCustomerDetailsForm(
   input: InteractiveFlowInput,
   state: InteractiveFlowState,
-  sessionKey: string
+  sessionKey: string,
+  params: Record<string, unknown>
 ): Promise<InteractiveFlowResult> {
-  const fields = customerFieldsFor(String(state.slots.personType));
-  const index = Number(state.slots.fieldIndex ?? 0);
-  const field = fields[index]!;
-  const raw = input.request.trim();
-  const skipped = !field.required && /^pular$/i.test(raw);
-  if (field.required && !raw) return askCustomerField(state, index);
-  if (!skipped) state.slots = { ...state.slots, [field.key]: raw };
-  const nextIndex = firstUnfilledFieldIndex(fields, state.slots, index + 1);
-  if (nextIndex < fields.length) {
-    state.slots = { ...state.slots, fieldIndex: nextIndex };
-    input.store.set(sessionKey, state);
-    return askCustomerField(state, nextIndex);
+  const personType = stringValue(params.personType)?.trim() ?? "";
+  const document = stringValue(params.document)?.trim() ?? "";
+  const name = stringValue(params.name)?.trim() ?? "";
+  const billingEmailRaw =
+    stringValue(params.billingEmail)?.trim() || stringValue(params.email)?.trim() || "";
+  const billingEmail = isRedactedPlaceholder(billingEmailRaw) ? "" : billingEmailRaw;
+  const billingPhoneRaw =
+    stringValue(params.billingPhone)?.trim() || stringValue(params.cellPhone)?.trim() || "";
+  const billingPhone = isRedactedPlaceholder(billingPhoneRaw) ? "" : billingPhoneRaw;
+
+  const formDefaults = formDefaultsFromParams(params);
+
+  if (!personType || !document || !name) {
+    return {
+      handled: true,
+      result: {
+        ...promptCreateCustomerDetailsForm(
+          state,
+          "Preencha tipo de pessoa, documento e nome para continuar.",
+          formDefaults
+        ),
+        formDefaults
+      }
+    };
   }
+
+  if (!billingEmail || !billingPhone) {
+    return {
+      handled: true,
+      result: {
+        ...promptCreateCustomerDetailsForm(
+          state,
+          "Informe e-mail e telefone de cobrança (ou preencha e-mail/celular para reaproveitar).",
+          formDefaults
+        ),
+        formDefaults
+      }
+    };
+  }
+
+  state.slots = {
+    ...state.slots,
+    personType,
+    document,
+    name,
+    companyName: stringValue(params.companyName)?.trim() ?? "",
+    email: stringValue(params.email)?.trim() ?? "",
+    cellPhone: stringValue(params.cellPhone)?.trim() ?? "",
+    commercialPhone: stringValue(params.commercialPhone)?.trim() ?? "",
+    zipcode: stringValue(params.zipcode)?.trim() ?? "",
+    numberAddress: stringValue(params.numberAddress)?.trim() ?? "",
+    billingEmail,
+    billingPhone
+  };
+  const handoffContext = {
+    tenantId: state.slots.tenantId,
+    relationId: state.slots.relationId,
+    tenantName: state.slots.tenantName
+  };
   input.store.delete(sessionKey);
-  const params = createCustomerWorkflowParams(state.slots);
-  const receipt = await executeTool<unknown>(input.registry, "contaazul.create_customer_workflow", params);
+
+  const workflowParams = createCustomerWorkflowParams(state.slots);
+  const receipt = await executeTool<unknown>(input.registry, "contaazul.create_customer_workflow", workflowParams);
   const operationId = operationIdFromReceipt(receipt);
+  const receiptData = enrichCreateCustomerReceiptData(receipt.data, {
+    ...handoffContext,
+    personType: workflowParams.personType,
+    document: workflowParams.document,
+    name: workflowParams.name
+  });
   return {
     handled: true,
     draftOperationId: receipt.status === "planned" ? operationId : undefined,
-    draft: receipt.status === "planned" ? { operationId, toolName: receipt.toolName, params } : undefined,
+    draft: receipt.status === "planned" ? { operationId, toolName: receipt.toolName, params: workflowParams } : undefined,
     result: {
       status: "executed",
       provider: "contaazul",
@@ -1136,12 +1410,144 @@ async function collectCustomerField(
       toolName: receipt.toolName,
       operationId,
       receiptStatus: receipt.status,
-      summary: receipt.status === "planned" ? "Dry-run concluído. Revise os dados e aprove para cadastrar o cliente de verdade." : receipt.summary,
+      summary:
+        receipt.status === "planned"
+          ? "Dry-run concluído. Revise os dados e aprove para cadastrar o cliente de verdade."
+          : receipt.summary,
       missingFields: [],
       questions: [],
       warnings: receipt.warnings,
       approvalAvailable: receipt.status === "planned",
-      receiptData: receipt.data
+      receiptData
+    }
+  };
+}
+
+function enrichCreateCustomerReceiptData(
+  data: unknown,
+  handoff: {
+    tenantId?: unknown;
+    relationId?: unknown;
+    tenantName?: unknown;
+    personType?: unknown;
+    document?: unknown;
+    name?: unknown;
+  }
+): unknown {
+  if (!data || typeof data !== "object") return data;
+  const record = data as Record<string, unknown>;
+  const resolved = asRecord(record.resolved);
+  return {
+    ...record,
+    personType: record.personType ?? handoff.personType,
+    document: record.document ?? handoff.document,
+    name: record.name ?? handoff.name,
+    resolved: {
+      ...resolved,
+      tenantId: resolved.tenantId ?? handoff.tenantId,
+      relationId: resolved.relationId ?? handoff.relationId,
+      tenantName: resolved.tenantName ?? handoff.tenantName,
+      customerName: resolved.customerName ?? resolved.name ?? stringValue(handoff.name)
+    }
+  };
+}
+
+async function loadCnpjIntoCreateCustomerForm(
+  input: InteractiveFlowInput,
+  state: InteractiveFlowState,
+  sessionKey: string,
+  params: Record<string, unknown>
+): Promise<InteractiveFlowResult> {
+  const formDefaults = formDefaultsFromParams(params);
+  const personType = stringValue(params.personType) ?? stringValue(state.slots.personType);
+
+  if (personType !== "Jurídica") {
+    return {
+      handled: true,
+      result: {
+        ...promptCreateCustomerDetailsForm(state, undefined, formDefaults),
+        formDefaults
+      }
+    };
+  }
+
+  const document = stringValue(params.document)?.trim() ?? "";
+  const cleanDoc = document.replace(/\D/g, "");
+  if (cleanDoc.length !== 14) {
+    return {
+      handled: true,
+      result: {
+        ...promptCreateCustomerDetailsForm(
+          state,
+          cleanDoc.length > 0
+            ? "Informe um CNPJ válido com 14 dígitos para buscar os dados automaticamente."
+            : undefined,
+          formDefaults
+        ),
+        formDefaults
+      }
+    };
+  }
+
+  const relationId = stringValue(state.slots.relationId);
+  if (!relationId) {
+    return { handled: true, result: blocked("Empresa não selecionada para buscar o CNPJ.") };
+  }
+
+  const cnpjReceipt = await executeTool<CustomerCnpjPrefill>(input.registry, "contaazul.lookup_cnpj", {
+    relationId,
+    cnpj: document
+  });
+
+  if (cnpjReceipt.status !== "succeeded" || !cnpjReceipt.data) {
+    return {
+      handled: true,
+      result: {
+        ...promptCreateCustomerDetailsForm(
+          state,
+          cnpjReceipt.summary ?? "Não foi possível buscar os dados do CNPJ. Preencha manualmente.",
+          formDefaults
+        ),
+        formDefaults,
+        warnings: cnpjReceipt.warnings ?? []
+      }
+    };
+  }
+
+  let prefill: CustomerCnpjPrefill = cnpjReceipt.data;
+  if (prefill.zipcode) {
+    const cepReceipt = await executeTool<CustomerCnpjPrefill>(input.registry, "contaazul.lookup_cep", {
+      cep: prefill.zipcode
+    });
+    if (cepReceipt.status === "succeeded" && cepReceipt.data) {
+      prefill = { ...prefill, ...cepReceipt.data };
+    }
+  }
+
+  state.slots = {
+    ...state.slots,
+    ...prefillToWorkflowSlots(prefill),
+    personType,
+    document
+  };
+  state.step = "createCustomerDetailsForm";
+  input.store.set(sessionKey, state);
+
+  const mergedDefaults = sanitizeFormDefaultValues(
+    mergePrefillIntoFormDefaults(formDefaults, prefillToFormDefaults(prefill))
+  );
+
+  return {
+    handled: true,
+    result: {
+      ...promptCreateCustomerDetailsForm(
+        state,
+        prefill.name
+          ? `Dados do CNPJ carregados para ${prefill.name}. Revise e complete o cadastro.`
+          : "Dados do CNPJ carregados da Receita Federal. Revise e complete o cadastro.",
+        mergedDefaults
+      ),
+      formDefaults: mergedDefaults
     }
   };
 }
@@ -1149,6 +1555,8 @@ async function collectCustomerField(
 function createCustomerWorkflowParams(slots: Record<string, unknown>): Record<string, unknown> {
   return {
     tenantId: slots.tenantId,
+    relationId: slots.relationId,
+    tenantName: slots.tenantName,
     personType: slots.personType,
     document: slots.document,
     name: slots.name,
@@ -1339,59 +1747,54 @@ async function continueContaAzulFlow(
 ): Promise<InteractiveFlowResult> {
   if (marker.action === "start_create_customer") {
     const suggestedName = stringValue(input.params?.suggestedName);
-    input.store.set(sessionKey, {
+    const nextState: InteractiveFlowState = {
       flow: CONTAZUL_CREATE_CUSTOMER_FLOW,
-      step: "customerPersonType",
+      step: "createCustomerDetailsForm",
       slots: {
         tenantId: state.slots.tenantId,
         relationId: state.slots.relationId,
         tenantName: state.slots.tenantName,
         ...(suggestedName ? { suggestedName } : {})
       }
-    });
-    return {
-      handled: true,
-      result: needsInput({
-        toolName: CONTAZUL_CREATE_CUSTOMER_TOOL_NAME,
-        summary: suggestedName
-          ? `Vamos cadastrar "${suggestedName}".`
-          : "Vamos cadastrar um novo cliente.",
-        missingFields: ["personType"],
-        questions: ["O cliente é Pessoa Física ou Jurídica?"],
-        choices: [
-          {
-            id: "person:fisica",
-            label: "Física",
-            params: {
-              __interactive: { flow: CONTAZUL_CREATE_CUSTOMER_FLOW, action: "select_person_type" },
-              personType: "Física"
-            }
-          },
-          {
-            id: "person:juridica",
-            label: "Jurídica",
-            params: {
-              __interactive: { flow: CONTAZUL_CREATE_CUSTOMER_FLOW, action: "select_person_type" },
-              personType: "Jurídica"
-            }
-          }
-        ]
-      })
     };
+    input.store.set(sessionKey, nextState);
+    return transitionToCreateCustomerForm(input, nextState, sessionKey, {
+      summary: suggestedName
+        ? `Vamos cadastrar "${suggestedName}". Preencha os dados abaixo.`
+        : "Vamos cadastrar um novo cliente. Preencha os dados abaixo."
+    });
   }
 
   if (marker.action === "start_with_customer") {
-    const relationId = stringValue(input.params?.relationId);
+    let relationId = stringValue(input.params?.relationId);
+    const tenantId = input.params?.tenantId;
+    if (!relationId && tenantId !== undefined) {
+      const tenantsReceipt = await executeTool<AccountancyClient[]>(
+        input.registry,
+        "contaazul.list_accountancy_clients",
+        {}
+      );
+      const tenants = Array.isArray(tenantsReceipt.data) ? tenantsReceipt.data : [];
+      const match = tenants.find((tenant) => String(tenant.tenantId) === String(tenantId));
+      relationId = match?.relationId;
+    }
     if (relationId) {
       await executeTool<unknown>(input.registry, "contaazul.switch_to_pro_session", { relationId });
     }
     state.slots = {
       ...state.slots,
-      tenantId: input.params?.tenantId,
+      tenantId,
       relationId,
+      tenantName: stringValue(input.params?.tenantName) ?? state.slots.tenantName,
       customerId: stringValue(input.params?.customerId),
       customerName: stringValue(input.params?.customerName)
     };
+    if (!relationId) {
+      return {
+        handled: true,
+        result: blocked("A empresa selecionada não possui relationId para buscar categorias e itens.")
+      };
+    }
     input.store.set(sessionKey, state);
     return transitionToSaleDetailsForm(input, state, sessionKey, {
       summary: `Cliente ${state.slots.customerName ?? ""} selecionado. Preencha os dados da cobrança.`
@@ -1607,14 +2010,18 @@ async function deliverStatements(
 function filterStatementItems(
   items: FinancialStatementItem[],
   hints: string[],
-  onlyOverdue: boolean
+  onlyOverdue: boolean,
+  onlyPending = false
 ): FinancialStatementItem[] {
   let out = items;
   if (hints.length > 0) {
     const needles = hints.map((hint) => normalize(hint)).filter(Boolean);
+    out = out.filter((item) => needles.some((needle) => statementMatchesCustomerHint(item, needle)));
+  }
+  if (onlyPending) {
     out = out.filter((item) => {
-      const name = normalize(stringValue(item.customerName) ?? "");
-      return needles.some((needle) => name.includes(needle));
+      const status = String(item.status ?? "").toUpperCase();
+      return status !== "PAID" && status !== "ACQUITTED";
     });
   }
   if (onlyOverdue) {
@@ -2165,6 +2572,14 @@ async function collectNotificationReplyToAndPlan(
 }
 
 function serviceSaleWorkflowParams(slots: Record<string, unknown>): Record<string, unknown> {
+  const replyTo = stringValue(slots.notificationReplyTo)?.trim();
+  const notification: Record<string, unknown> = {
+    phone: slots.notificationPhone,
+    email: slots.notificationEmail
+  };
+  if (replyTo) {
+    notification.replyTo = replyTo;
+  }
   return {
     tenantId: slots.tenantId,
     customerName: slots.customerName,
@@ -2173,11 +2588,7 @@ function serviceSaleWorkflowParams(slots: Record<string, unknown>): Record<strin
     serviceDescription: slots.serviceDescription,
     unitValueBr: slots.unitValueBr,
     dueDateBr: slots.dueDateBr,
-    notification: {
-      phone: slots.notificationPhone,
-      email: slots.notificationEmail,
-      replyTo: slots.notificationReplyTo
-    }
+    notification
   };
 }
 
@@ -2203,6 +2614,21 @@ function customerChoice(item: unknown, flow: InteractiveFlowName = CONTAZUL_FLOW
     description: "Cliente Conta Azul",
     params: {
       __interactive: { flow, action: "select_customer" },
+      customerId: id,
+      customerName: name
+    }
+  };
+}
+
+function contaazulCustomerFormChoice(item: unknown): AgentChoiceView {
+  const record = asRecord(item);
+  const id = stringValue(record.id) ?? "";
+  const name = stringValue(record.name) ?? id;
+  return {
+    id: `contaazul-customer:${id}`,
+    label: name,
+    description: "Cliente Conta Azul",
+    params: {
       customerId: id,
       customerName: name
     }
@@ -2717,20 +3143,19 @@ async function transitionToAsaasDownloadForm(
     handled: true,
     result: promptAsaasDownloadDetailsForm(
       state,
-      options?.summary ?? "Selecione o cliente e a cobrança para baixar o PDF do boleto."
+      options?.summary ?? "Selecione o cliente. As cobranças boleto aparecem na lista abaixo."
     )
   };
 }
 
 function promptAsaasDownloadDetailsForm(
   state: InteractiveFlowState,
-  summary = "Selecione o cliente e a cobrança para baixar o PDF do boleto.",
+  summary = "Selecione o cliente. As cobranças boleto aparecem na lista abaixo.",
   partialDefaults?: Record<string, string>
 ): AgentResultView {
   const customerId = stringValue(state.slots.customerId) ?? "";
   const customerName = stringValue(state.slots.customerName) ?? "";
   const chargeId = stringValue(state.slots.chargeId) ?? "";
-  const chargeSummary = resolveChoiceLabel(state.formChoices?.chargeId, "chargeId", chargeId);
 
   return {
     ...needsInput({
@@ -2738,19 +3163,19 @@ function promptAsaasDownloadDetailsForm(
       provider: "asaas",
       intent: "download_boleto_pdf",
       summary,
-      missingFields: ["customerId", "chargeId"],
+      missingFields: ["customerId", "chargeIds"],
       questions: []
     }),
     formId: "asaas_download_boleto",
     formDefaults: {
       customerId,
-      chargeId,
+      chargeIds: chargeId,
       ...partialDefaults
     },
     formChoices: state.formChoices,
     formContext: {
       customerName,
-      chargeSummary: chargeSummary ?? ""
+      chargeSummary: resolveChoiceLabel(state.formChoices?.chargeId, "chargeId", chargeId) ?? ""
     }
   };
 }
@@ -2808,7 +3233,7 @@ async function loadAsaasDownloadChargesIntoForm(
   const formDefaults = {
     ...formDefaultsFromParams(params),
     customerId,
-    chargeId: stringValue(params.chargeId) ?? ""
+    chargeIds: stringValue(params.chargeIds) ?? stringValue(params.chargeId) ?? ""
   };
 
   if (charges.length === 0) {
@@ -2831,7 +3256,7 @@ async function loadAsaasDownloadChargesIntoForm(
       ...promptAsaasDownloadDetailsForm(
         state,
         options?.summary ??
-          `Encontrei ${charges.length} cobrança(s) boleto de ${customerName ?? "cliente"}. Selecione para baixar o PDF.`,
+          `Encontrei ${charges.length} cobrança(s) boleto de ${customerName ?? "cliente"}. Selecione a cobrança e clique em Baixar PDF.`,
         formDefaults
       ),
       formDefaults
@@ -2846,7 +3271,8 @@ async function collectAsaasDownloadBoletoForm(
   params: Record<string, unknown>
 ): Promise<InteractiveFlowResult> {
   const customerId = stringValue(params.customerId)?.trim() ?? "";
-  const chargeId = stringValue(params.chargeId)?.trim() ?? "";
+  const chargeId =
+    stringValue(params.chargeId)?.trim() ?? parseChargeIds(params)[0] ?? "";
   const customerName =
     stringValue(params.customerName) ??
     resolveChoiceLabel(state.formChoices?.customerId, "customerId", customerId) ??
@@ -2949,6 +3375,73 @@ function asaasChargeFormChoice(charge: PendingCharge): AgentChoiceView {
   };
 }
 
+function contaazulStatementFormChoice(item: FinancialStatementItem): AgentChoiceView {
+  const installmentId = item.installmentId ?? item.id;
+  const status = String(item.status ?? "").toUpperCase();
+  const statusLabel =
+    status === "PAID" || status === "ACQUITTED" ? "liquidada" : status ? status.toLowerCase() : "pendente";
+  const dueLabel = item.dueDateIso ? formatIsoToBr(item.dueDateIso) : "—";
+  return {
+    id: `contaazul-statement:${installmentId}`,
+    label: item.description,
+    description: `${formatMoneyBr(item.value)} · vence ${dueLabel} · ${statusLabel}`,
+    params: {
+      chargeId: installmentId,
+      financialEventId: item.financialEventId,
+      installmentId
+    }
+  };
+}
+
+function formatMoneyBr(value: number): string {
+  return `R$ ${value.toFixed(2).replace(".", ",")}`;
+}
+
+function statementSearchQueryFromCustomerName(customerName: string): string {
+  const trimmed = customerName.trim();
+  if (!trimmed) return "";
+
+  const dashParts = trimmed.split(/\s*-\s+/);
+  if (dashParts.length > 1) {
+    const lead = dashParts[0]?.trim();
+    if (lead && lead.length >= 3) return lead;
+  }
+
+  const firstWord = trimmed.split(/\s+/)[0]?.trim();
+  if (firstWord && firstWord.length >= 3) return firstWord;
+
+  return trimmed.length > 48 ? trimmed.slice(0, 48).trim() : trimmed;
+}
+
+function statementMatchesCustomerHint(item: FinancialStatementItem, needle: string): boolean {
+  if (!needle) return true;
+
+  const customerName = normalize(stringValue(item.customerName) ?? "");
+  if (customerName && (customerName.includes(needle) || needle.includes(customerName))) {
+    return true;
+  }
+
+  const description = normalize(item.description ?? "");
+  if (description.includes(needle)) return true;
+
+  const categoryName = normalize(stringValue(item.categoryName) ?? "");
+  if (categoryName.includes(needle)) return true;
+
+  return false;
+}
+
+function resolveStatementFromFormChoices(
+  choices: AgentChoiceView[] | undefined,
+  chargeId: string
+): { financialEventId: string; installmentId: string } | undefined {
+  const choice = choices?.find((item) => stringValue(item.params?.chargeId) === chargeId);
+  if (!choice) return undefined;
+  const financialEventId = stringValue(choice.params?.financialEventId);
+  const installmentId = stringValue(choice.params?.installmentId);
+  if (!financialEventId || !installmentId) return undefined;
+  return { financialEventId, installmentId };
+}
+
 function chargeFactsFromFormChoices(
   choices: AgentChoiceView[] | undefined,
   chargeId: string
@@ -2979,6 +3472,7 @@ function choiceValueFromParams(fieldName: string, choice: AgentChoiceView): stri
   if (fieldName === "chargeId") return String(params.chargeId ?? "");
   if (fieldName === "categoryId") return String(params.categoryId ?? "");
   if (fieldName === "itemId") return String(params.itemId ?? "");
+  if (fieldName === "personType") return String(params.personType ?? "");
   return String(params[fieldName] ?? choice.id);
 }
 
@@ -3218,7 +3712,7 @@ async function collectSaleDetailsForm(
     dueDateBr,
     notificationPhone: phone,
     notificationEmail: email,
-    notificationReplyTo: replyTo
+    ...(replyTo ? { notificationReplyTo: replyTo } : {})
   };
   input.store.delete(sessionKey);
 

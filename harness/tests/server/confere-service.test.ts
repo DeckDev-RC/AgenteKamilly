@@ -734,6 +734,44 @@ describe("confere service", () => {
       missingFields: ["operation"]
     });
   });
+
+  it("updates app settings in the env file and persists conversations", async () => {
+    const cwd = await mkdtemp(path.join(os.tmpdir(), "confere-service-"));
+    const service = await createConfereService({
+      cwd,
+      env: {
+        RUNTIME_MODE: "dry-run",
+        ASAAS_ENV_PATH: "missing.env",
+        CONTAAZUL_STATE_PATH: "missing.json"
+      },
+      registryFactory: async () => ({ registry: createToolRegistry(), warnings: [] }),
+      modelProvider: createFakeModelProvider({})
+    });
+
+    const updated = await service.updateAppSettings({
+      allowLiveMutations: true,
+      geminiApiKey: "new-secret-key"
+    });
+    expect(updated.settings.allowLiveMutations).toBe(true);
+    expect(updated.settings.geminiApiKeyConfigured).toBe(true);
+    expect(updated.settings.geminiApiKeyHint).toBe("-key");
+    expect(JSON.stringify(updated.settings)).not.toContain("new-secret-key");
+
+    const status = await service.getStatus();
+    expect(status.allowLiveMutations).toBe(true);
+
+    const saved = await service.saveConversation({
+      id: "confere_test",
+      title: "Teste",
+      createdAt: "2026-06-22T10:00:00.000Z",
+      updatedAt: "2026-06-22T10:00:00.000Z",
+      messages: [{ id: "u1", role: "user", text: "Olá", timestamp: "10:00" }]
+    });
+    expect(saved.conversation.id).toBe("confere_test");
+
+    const listed = await service.listConversations();
+    expect(listed.conversations[0]?.title).toBe("Teste");
+  });
 });
 
 function plannedReceipt(toolName: string, operationId: string): ToolReceipt {

@@ -18,7 +18,10 @@ const fs = require("fs");
 const path = require("path");
 const readline = require("readline");
 
-const ROOT = __dirname;
+// No app empacotado, o processo main passa CONFERE_DATA_DIR = userData (gravável
+// em qualquer máquina) — onde o app TAMBÉM lê .env e contaazul/state.json. Em dev,
+// cai no __dirname (raiz do monorepo), preservando o comportamento atual.
+const ROOT = process.env.CONFERE_DATA_DIR || __dirname;
 
 const PROVIDERS = {
   asaas: {
@@ -88,11 +91,28 @@ async function openPersistentSession(chromium, config) {
     );
   }
 
-  const context = await chromium.launchPersistentContext(config.profileDir, {
-    headless: false,
-    viewport: null,
-    args: ["--start-maximized"]
-  });
+  // Usa o navegador JÁ instalado na máquina: Edge (vem no Windows 10/11) → Chrome
+  // → Chromium do Playwright (só existe em dev/full). Nada de baixar navegador.
+  const launchBase = { headless: false, viewport: null, args: ["--start-maximized"] };
+  const channels = ["msedge", "chrome", undefined];
+  let context;
+  let lastError;
+  for (const channel of channels) {
+    try {
+      context = await chromium.launchPersistentContext(
+        config.profileDir,
+        channel ? { ...launchBase, channel } : launchBase
+      );
+      break;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  if (!context) {
+    throw new Error(
+      `Não foi possível abrir um navegador (Edge/Chrome). ${lastError instanceof Error ? lastError.message : ""}`.trim()
+    );
+  }
 
   const page = context.pages()[0] ?? (await context.newPage());
   await page.goto(config.homeUrl, { waitUntil: "domcontentloaded", timeout: 60_000 }).catch(() =>
@@ -163,13 +183,19 @@ async function main() {
     return;
   }
 
+  // playwright-core (empacotado no app, sem navegador embutido) tem prioridade;
+  // playwright completo cobre o dev. O navegador vem do sistema (Edge/Chrome).
   let chromium;
   try {
-    ({ chromium } = require("playwright"));
+    ({ chromium } = require("playwright-core"));
   } catch {
-    log("@@ERROR@@ Playwright não está instalado neste ambiente.");
-    process.exit(1);
-    return;
+    try {
+      ({ chromium } = require("playwright"));
+    } catch {
+      log("@@ERROR@@ Playwright não está disponível neste ambiente.");
+      process.exit(1);
+      return;
+    }
   }
 
   await renewProvider(chromium, provider);

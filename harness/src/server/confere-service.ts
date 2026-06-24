@@ -5,6 +5,13 @@ import { runAgentTurn } from "../agent/agent-runner.js";
 import { createAgentModelProvider } from "../agent/model-provider-factory.js";
 import type { ModelProvider } from "../agent/model-provider.js";
 import { loadHarnessConfig, type HarnessConfig } from "../core/config.js";
+import {
+  createConversationStore,
+  deriveConversationPreview,
+  deriveConversationTitle,
+  type StoredConversation
+} from "../core/conversation-store.js";
+import { resolveEnvFilePath, upsertEnvKey } from "../core/env-settings.js";
 import { checkConnections, type ConnectionHealth } from "../core/connection-health.js";
 import { SessionExpiredError } from "../core/http-client.js";
 import { createPreferencesStore } from "../core/preferences-store.js";
@@ -28,11 +35,20 @@ import { parseAccountancyClients } from "../modules/contaazul/parsers.js";
 import type {
   AgentTurnApiRequest,
   AgentTurnApiResponse,
+  AppSettingsView,
   ConfirmationSheetApiResponse,
   ConfirmationSheetView,
   ConfereStatus,
+  ConversationDeleteApiResponse,
+  ConversationGetApiResponse,
+  ConversationListApiResponse,
+  ConversationSaveApiRequest,
+  ConversationSaveApiResponse,
+  ConversationSummaryView,
   ExecuteOperationApiRequest,
-  ExecuteOperationApiResponse
+  ExecuteOperationApiResponse,
+  UpdateAppSettingsRequest,
+  UpdateAppSettingsResponse
 } from "./api-types.js";
 import {
   createDraftStore,
@@ -59,6 +75,12 @@ export type ConfereService = {
   searchSaleCustomers(relationId: string, searchTerm: string): Promise<any[]>;
   searchFinancialCategories(relationId: string, searchTerm: string): Promise<any[]>;
   searchServiceItems(relationId: string, searchTerm: string): Promise<any[]>;
+  getAppSettings(): Promise<AppSettingsView>;
+  updateAppSettings(input: UpdateAppSettingsRequest): Promise<UpdateAppSettingsResponse>;
+  listConversations(): Promise<ConversationListApiResponse>;
+  getConversation(id: string): Promise<ConversationGetApiResponse>;
+  saveConversation(input: ConversationSaveApiRequest): Promise<ConversationSaveApiResponse>;
+  deleteConversation(id: string): Promise<ConversationDeleteApiResponse>;
 };
 
 export type CreateConfereServiceOptions = {
@@ -73,7 +95,8 @@ export async function createConfereService(
   options: CreateConfereServiceOptions = {}
 ): Promise<ConfereService> {
   const cwd = resolveConfigCwd(options.cwd ?? process.cwd());
-  loadDotenv({ path: path.resolve(cwd, ".env"), override: false, quiet: true });
+  const envFilePath = resolveEnvFilePath(cwd);
+  loadDotenv({ path: envFilePath, override: false, quiet: true });
   loadDotenv({ path: path.resolve(cwd, "contaazul/.env"), override: false, quiet: true });
   const baseEnv = { ...process.env, ...(options.env ?? {}) };
   // Persist Pro-session tokens across agent turns. runtime() rebuilds the tool
@@ -101,6 +124,35 @@ export async function createConfereService(
   const preferencesStore = createPreferencesStore(
     path.join(loadConfig("dry-run").artifactsDir, "preferences.json")
   );
+  const conversationStore = createConversationStore(
+    path.join(loadConfig("dry-run").artifactsDir, "conversations")
+  );
+
+  function reloadEnvFromDisk(): void {
+    loadDotenv({ path: envFilePath, override: true, quiet: true });
+    Object.assign(baseEnv, process.env);
+  }
+
+  function buildAppSettings(): AppSettingsView {
+    const config = loadConfig("dry-run");
+    const key = config.geminiApiKey;
+    return {
+      envPath: envFilePath,
+      allowLiveMutations: config.allowLiveMutations,
+      geminiApiKeyConfigured: Boolean(key),
+      geminiApiKeyHint: key.length >= 4 ? key.slice(-4) : undefined
+    };
+  }
+
+  function toConversationSummary(conversation: StoredConversation): ConversationSummaryView {
+    return {
+      id: conversation.id,
+      title: conversation.title,
+      updatedAt: conversation.updatedAt,
+      preview: deriveConversationPreview(conversation.messages),
+      messageCount: conversation.messages.length
+    };
+  }
 
   async function runtime(runtimeMode?: "dry-run" | "live"): Promise<{
     config: HarnessConfig;
@@ -350,6 +402,55 @@ export async function createConfereService(
       const client = await getContaAzulClient();
       const authToken = await getProAuthToken(relationId);
       return client.searchServiceItems({ authToken, searchTerm });
+    },
+
+    async getAppSettings() {
+      return buildAppSettings();
+    },
+
+    async updateAppSettings(input) {
+      if (input.allowLiveMutations !== undefined) {
+        upsertEnvKey(envFilePath, "ALLOW_LIVE_MUTATIONS", input.allowLiveMutations ? "true" : "false");
+        baseEnv.ALLOW_LIVE_MUTATIONS = input.allowLiveMutations ? "true" : "false";
+      }
+      if (input.geminiApiKey !== undefined && input.geminiApiKey.trim()) {
+        const trimmed = input.geminiApiKey.trim();
+        upsertEnvKey(envFilePath, "GEMINI_API_KEY", trimmed);
+        baseEnv.GEMINI_API_KEY = trimmed;
+      }
+      reloadEnvFromDisk();
+      return { status: "ok", settings: buildAppSettings() };
+    },
+
+    async listConversations() {
+      return { status: "ok", conversations: conversationStore.list() };
+    },
+
+    async getConversation(id) {
+      const conversation = conversationStore.get(id);
+      if (!conversation) return { status: "not_found" };
+      return { status: "ok", conversation };
+    },
+
+    async saveConversation(input) {
+      const now = new Date().toISOString();
+      const existing = conversationStore.get(input.id);
+      const conversation: StoredConversation = {
+        id: input.id,
+        title: input.title.trim() || deriveConversationTitle(input.messages),
+        createdAt: existing?.createdAt ?? input.createdAt ?? now,
+        updatedAt: now,
+        messages: input.messages
+      };
+      conversationStore.save(conversation);
+      return { status: "ok", conversation: toConversationSummary(conversation) };
+    },
+
+    async deleteConversation(id) {
+      const existing = conversationStore.get(id);
+      if (!existing) return { status: "not_found" };
+      conversationStore.remove(id);
+      return { status: "ok" };
     }
   };
 }
@@ -445,23 +546,37 @@ function normalizeDraftParamsForExecution(
 }
 
 function confirmationSheetFromDraft(draft: OperationDraft): ConfirmationSheetView {
+  const isCreateCustomer = draft.toolName === "contaazul.create_customer_workflow";
   return {
     operationId: draft.operationId,
     toolName: draft.toolName,
     provider: draft.toolName.startsWith("asaas.") ? "asaas" : "contaazul",
     tenantId: stringOrNumber(draft.params.tenantId),
-    tenantName: stringValue(draft.params.tenantName) ?? stringValue(draft.params.companyName),
-    customerName: stringValue(draft.params.customerName),
+    tenantName:
+      stringValue(draft.params.tenantName) ??
+      stringValue(draft.params.companyName),
+    customerName: isCreateCustomer
+      ? stringValue(draft.params.name) ?? stringValue(draft.params.customerName)
+      : stringValue(draft.params.customerName),
     categoryName: stringValue(draft.params.categoryName),
     itemName: stringValue(draft.params.itemName),
-    description:
-      stringValue(draft.params.serviceDescription) ?? stringValue(draft.params.description),
+    description: isCreateCustomer
+      ? [
+          stringValue(draft.params.personType) ? `Tipo: ${draft.params.personType}` : undefined,
+          stringValue(draft.params.document) ? `Documento: ${draft.params.document}` : undefined
+        ]
+          .filter(Boolean)
+          .join(" · ") || undefined
+      : stringValue(draft.params.serviceDescription) ?? stringValue(draft.params.description),
     value:
-      stringOrNumber(draft.params.unitValue) ??
-      stringValue(draft.params.unitValueBr) ??
-      stringValue(draft.params.valueBr),
-    dueDate:
-      stringValue(draft.params.dueDateBr) ?? stringValue(draft.params.dueDateIso),
+      isCreateCustomer
+        ? undefined
+        : stringOrNumber(draft.params.unitValue) ??
+          stringValue(draft.params.unitValueBr) ??
+          stringValue(draft.params.valueBr),
+    dueDate: isCreateCustomer
+      ? undefined
+      : stringValue(draft.params.dueDateBr) ?? stringValue(draft.params.dueDateIso),
     idempotencyKey: stringValue(draft.params.idempotencyKey),
     warnings: []
   };

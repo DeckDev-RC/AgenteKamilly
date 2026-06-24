@@ -4,23 +4,29 @@ import { describe, expect, it } from "vitest";
 import { App } from "../../src/ui/App.js";
 import { ConfirmationSheet } from "../../src/ui/components/ConfirmationSheet.js";
 import { PixelynAvatar } from "../../src/ui/components/PixelynAvatar.js";
+import { PdfArtifactActions } from "../../src/ui/components/PdfArtifactActions.js";
 import { PlanCard } from "../../src/ui/components/PlanCard.js";
-import { AssistantResultMessage, buildBoletoHandoffParams } from "../../src/ui/screens/AssistantScreen.js";
+import {
+  AssistantResultMessage,
+  buildBoletoHandoffParams,
+  OperationContextPanel
+} from "../../src/ui/screens/AssistantScreen.js";
 import { OperationsScreen } from "../../src/ui/screens/OperationsScreen.js";
 
 describe("Confere UI", () => {
-  it("renders the assistant-first shell with the three rail destinations", () => {
+  it("renders the assistant-first shell with the four rail destinations", () => {
     const html = renderToString(<App />);
     expect(html).toContain("Confere");
     expect(html).toContain("Conversa");
     expect(html).toContain("Operações");
     expect(html).toContain("Sessões");
+    expect(html).toContain("Configurações");
   });
 
-  it("renders the Pixelyn presence in the rail", () => {
+  it("renders the brand logo in the rail", () => {
     const html = renderToString(<App />);
-    expect(html).toContain("Confere");
-    expect(html).toContain("Pixelyn");
+    expect(html).toContain('class="rail__brand-logo"');
+    expect(html).toContain('alt="Confere"');
   });
 
   it("renders a professional assistant workspace with operation context", () => {
@@ -49,9 +55,21 @@ describe("Confere UI", () => {
     expect(html).toContain("Mudar vencimento · Conta Azul");
   });
 
-  it("renders the Pixelyn avatar with a state label for accessibility", () => {
+  it("renders the assistant avatar with a state label for accessibility", () => {
+    expect(renderToString(<PixelynAvatar state="feito" />)).toContain("Kawaii");
     expect(renderToString(<PixelynAvatar state="feito" />)).toContain("feito");
     expect(renderToString(<PixelynAvatar state="bloqueada" />)).toContain("bloqueada");
+  });
+
+  it("uses a static poster (no <video> decoder) for inactive avatars", () => {
+    // Avatar inativo: nenhum elemento <video> é montado — só o poster.
+    const inactive = renderToString(<PixelynAvatar state="pensando" playing={false} />);
+    expect(inactive).toContain("<img");
+    expect(inactive).not.toContain("<video");
+
+    // Avatar ativo: monta o <video> que realmente anima.
+    const active = renderToString(<PixelynAvatar state="pensando" playing={true} />);
+    expect(active).toContain("<video");
   });
 
   it("renders the plan card with business facts and no raw json", () => {
@@ -119,6 +137,49 @@ describe("Confere UI", () => {
     expect(html).not.toContain("__interactive");
   });
 
+  it("renders the inline create-customer form with empresa context", () => {
+    const html = renderToString(
+      <AssistantResultMessage
+        message={{
+          id: "assistant_create_customer_form",
+          role: "assistant",
+          timestamp: "12:10",
+          result: {
+            status: "needs_input",
+            provider: "contaazul",
+            intent: "create_customer",
+            toolName: "contaazul.interactive_create_customer",
+            summary: "Empresa MAIS NEGOCIOS selecionada. Preencha os dados do cliente.",
+            missingFields: ["personType", "document", "name", "billingEmail", "billingPhone"],
+            questions: [],
+            warnings: [],
+            approvalAvailable: false,
+            formId: "contaazul_create_customer_details",
+            formContext: { tenantName: "MAIS NEGOCIOS" },
+            formChoices: {
+              personType: [
+                { id: "person:fisica", label: "Física", description: "Pessoa física (CPF)", params: { personType: "Física" } },
+                { id: "person:juridica", label: "Jurídica", description: "Pessoa jurídica (CNPJ)", params: { personType: "Jurídica" } }
+              ]
+            }
+          }
+        }}
+        isLatest={true}
+        onReview={() => undefined}
+        onSend={() => undefined}
+      />
+    );
+
+    expect(html).toContain("chat-form");
+    expect(html).toContain("Cadastrar cliente");
+    expect(html).toContain("Empresa:");
+    expect(html).toContain("MAIS NEGOCIOS");
+    expect(html).toContain("Tipo de pessoa");
+    expect(html).toContain("CPF ou CNPJ");
+    expect(html).toContain("ao sair do campo");
+    expect(html).not.toContain("question-list");
+  });
+
   it("renders the inline sale form after item selection", () => {
     const html = renderToString(
       <AssistantResultMessage
@@ -153,6 +214,63 @@ describe("Confere UI", () => {
     expect(html).toContain("Preparar boleto");
     expect(html).toContain("Descrição do serviço");
     expect(html).not.toContain("question-list");
+  });
+
+  it("renders download-boleto charges as a picklist instead of search", () => {
+    const html = renderToString(
+      <AssistantResultMessage
+        message={{
+          id: "assistant_download_form",
+          role: "assistant",
+          timestamp: "11:20",
+          result: {
+            status: "needs_input",
+            provider: "asaas",
+            intent: "download_boleto_pdf",
+            toolName: "asaas.interactive_download_boleto",
+            summary: "Encontrei 1 cobrança(s) boleto de IRANI. Selecione para baixar o PDF.",
+            missingFields: ["customerId", "chargeIds"],
+            questions: [],
+            warnings: [],
+            approvalAvailable: false,
+            formId: "asaas_download_boleto",
+            formDefaults: {
+              customerId: "100322369",
+              customerName: "52.778.106 IRANI LACERDA DA SILVA",
+              chargeIds: ""
+            },
+            formChoices: {
+              customerId: [
+                {
+                  id: "asaas-customer:100322369",
+                  label: "52.778.106 IRANI LACERDA DA SILVA",
+                  description: "Cliente Asaas",
+                  params: { customerId: "100322369" }
+                }
+              ],
+              chargeId: [
+                {
+                  id: "asaas-charge:836609393",
+                  label: "Mensalidade",
+                  description: "R$ 15,00 · vence 18/07/2026 · Aguardando pagamento",
+                  params: { chargeId: "836609393" }
+                }
+              ]
+            }
+          }
+        }}
+        isLatest={true}
+        onReview={() => undefined}
+        onSend={() => undefined}
+      />
+    );
+
+    expect(html).toContain("Baixar boleto Asaas");
+    expect(html).toContain("form-charge-picklist");
+    expect(html).toContain("Mensalidade");
+    expect(html).toContain("R$ 15,00");
+    expect(html).toContain('type="radio"');
+    expect(html).not.toContain("Pesquisar cobran");
   });
 
   it("renders backend choice chips and not the legacy inline tenant/customer search", () => {
@@ -350,8 +468,26 @@ describe("Confere UI", () => {
     expect(html).toContain("836609393");
     expect(html).toContain("25/07/2026");
     expect(html).toContain("Baixe o PDF atualizado abaixo");
-    expect(html).toContain("boleto pdf atualizado");
+    expect(html).toContain("Baixar");
     expect(html).not.toContain("Boleto emitido com sucesso");
+  });
+
+  it("renders open and download actions for PDF artifacts", () => {
+    const html = renderToString(
+      <PdfArtifactActions
+        artifacts={[
+          {
+            kind: "pdf",
+            path: "C:\\artifacts\\asaas\\op_dl_1\\Mensalidade.pdf",
+            label: "boleto pdf"
+          }
+        ]}
+        hint="Mensalidade"
+      />
+    );
+
+    expect(html).toContain("Abrir · Mensalidade");
+    expect(html).toContain("Baixar · Mensalidade");
   });
 
   it("shows download-boleto success copy with PDF and no emission wording", () => {
@@ -375,6 +511,7 @@ describe("Confere UI", () => {
             approvalAvailable: false,
             receiptData: {
               chargeId: "836609393",
+              chargeLabel: "Mensalidade",
               customerName: "52.778.106 IRANI LACERDA DA SILVA",
               valueBr: "R$ 15,00",
               dueDateBr: "18/07/2026",
@@ -413,7 +550,9 @@ describe("Confere UI", () => {
     expect(html).toContain("836609393");
     expect(html).toContain("R$ 15,00");
     expect(html).toContain("18/07/2026");
-    expect(html).toContain("boleto pdf");
+    expect(html).toContain("Abrir");
+    expect(html).toContain("Baixar");
+    expect((html.match(/pill-btn pill-btn--primary/g) ?? []).length).toBe(1);
     expect(html).not.toContain("emitir o boleto");
     expect(html).not.toContain("Boleto emitido");
     expect(html).not.toContain("Boleto pronto");
@@ -489,5 +628,77 @@ describe("Confere UI", () => {
     const html = renderToString(<OperationsScreen />);
     expect(html).toContain("Histórico auditável");
     expect(html).toContain("Ledger redigido");
+  });
+
+  it("collapses the context panel to action-first when the operation is done", () => {
+    const html = renderToString(
+      <OperationContextPanel
+        phase="idle"
+        draftOperationId={undefined}
+        operation={{
+          operationId: "op_done",
+          found: true,
+          entryCount: 1,
+          latestStatus: "succeeded",
+          artifacts: [
+            { kind: "pdf", path: "C:\\artifacts\\op_done\\boleto.pdf", label: "boleto pdf" }
+          ],
+          warnings: [],
+          customerName: "IRANI LACERDA DA SILVA",
+          chargeId: "836609393",
+          dueDateBr: "27/06/2026"
+        }}
+        result={{
+          status: "executed",
+          provider: "contaazul",
+          intent: "update_due_date_reissue_boleto",
+          toolName: "contaazul.update_due_date_reissue_boleto",
+          receiptStatus: "succeeded",
+          summary: "ok",
+          missingFields: [],
+          questions: [],
+          warnings: [],
+          approvalAvailable: false,
+          receiptData: {}
+        }}
+      />
+    );
+
+    expect(html).toContain("Alteração concluída");
+    expect(html).toContain("Concluído");
+    expect(html).toContain("Boleto reemitido");
+    expect(html).toContain("Abrir");
+    // Stage-adaptive: pending fields and the "module suggestion" block are gone once done.
+    expect(html).not.toContain("Campos pendentes");
+    expect(html).not.toContain("Módulo sugerido");
+    expect(html).not.toContain("Nenhum campo pendente");
+  });
+
+  it("surfaces pending fields and the trust note while still collecting input", () => {
+    const html = renderToString(
+      <OperationContextPanel
+        phase="idle"
+        draftOperationId={undefined}
+        operation={undefined}
+        result={{
+          status: "needs_input",
+          provider: "contaazul",
+          intent: "create_service_sale_boleto",
+          toolName: "contaazul.interactive_service_sale_boleto",
+          summary: "Faltam dados.",
+          missingFields: ["unitValueBr", "dueDateBr"],
+          questions: [],
+          warnings: [],
+          approvalAvailable: false
+        }}
+      />
+    );
+
+    expect(html).toContain("Aguardando dados");
+    expect(html).toContain("Campos pendentes");
+    expect(html).toContain("Vencimento");
+    expect(html).toContain("Dry-run primeiro");
+    // No PDF hero while still in the draft stage.
+    expect(html).not.toContain("Boleto reemitido");
   });
 });

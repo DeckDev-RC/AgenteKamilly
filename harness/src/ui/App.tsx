@@ -9,6 +9,7 @@ import type { PixelynState } from "./lib/pixelyn-state.js";
 import { AssistantScreen } from "./screens/AssistantScreen.js";
 import { OperationsScreen } from "./screens/OperationsScreen.js";
 import { SessionsScreen } from "./screens/SessionsScreen.js";
+import { SettingsScreen } from "./screens/SettingsScreen.js";
 import type { ScreenId } from "./types.js";
 
 const ONBOARDED_KEY = "confere.onboarded";
@@ -24,6 +25,7 @@ function readOnboarded(): boolean {
 export function App(): ReactElement {
   const [screen, setScreen] = useState<ScreenId>("conversa");
   const [pixelynState, setPixelynState] = useState<PixelynState>("parada");
+  const [greetingVisible, setGreetingVisible] = useState(true);
   const [onboarded, setOnboarded] = useState(readOnboarded);
   const connections = useConnections();
 
@@ -43,7 +45,7 @@ export function App(): ReactElement {
   // Todas as telas ficam montadas; alternar só troca a visibilidade, então a
   // conversa (e qualquer rascunho) sobrevive à navegação entre abas.
   return (
-    <SlimRail activeScreen={screen} onNavigate={setScreen} pixelynState={pixelynState}>
+    <SlimRail activeScreen={screen} onNavigate={setScreen}>
       {onboarded ? (
         <ConnectionBanner
           connections={connections.connections}
@@ -52,7 +54,10 @@ export function App(): ReactElement {
       ) : null}
 
       <div className={`screen-host ${screen === "conversa" ? "" : "screen-host--hidden"}`}>
-        <AssistantScreen onPixelynState={setPixelynState} />
+        <AssistantScreen
+          onGreetingVisible={setGreetingVisible}
+          onPixelynState={setPixelynState}
+        />
       </div>
       <div className={`screen-host ${screen === "operacoes" ? "" : "screen-host--hidden"}`}>
         <OperationsScreen />
@@ -66,6 +71,9 @@ export function App(): ReactElement {
           onRenew={connections.renew}
           renewState={connections.renewState}
         />
+      </div>
+      <div className={`screen-host ${screen === "configuracoes" ? "" : "screen-host--hidden"}`}>
+        <SettingsScreen />
       </div>
 
       {showOnboarding ? (

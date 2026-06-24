@@ -1,28 +1,26 @@
-import { ClipboardList, MessageSquare, RadioTower } from "lucide-react";
+import { ClipboardList, MessageSquare, RadioTower, Settings } from "lucide-react";
 import type { ReactElement, ReactNode } from "react";
 
-import type { PixelynState } from "../lib/pixelyn-state.js";
+import sidebarLogoUrl from "../assets/logo/sidebar-logo.png";
 import type { ScreenId } from "../types.js";
-import { PixelynAvatar } from "./PixelynAvatar.js";
 
 const DESTINATIONS: Array<{ id: ScreenId; label: string; icon: typeof MessageSquare }> = [
   { id: "conversa", label: "Conversa", icon: MessageSquare },
   { id: "operacoes", label: "Operações", icon: ClipboardList },
-  { id: "sessoes", label: "Sessões", icon: RadioTower }
+  { id: "sessoes", label: "Sessões", icon: RadioTower },
+  { id: "configuracoes", label: "Configurações", icon: Settings }
 ];
 
 export function SlimRail(props: {
   activeScreen: ScreenId;
-  pixelynState: PixelynState;
   onNavigate: (screen: ScreenId) => void;
   children: ReactNode;
 }): ReactElement {
   return (
     <div className="app-shell">
       <aside className="rail" aria-label="Confere navegação principal">
-        <div className="rail__pixelyn">
-          <PixelynAvatar context="rail" state={props.pixelynState} />
-          <span className="rail__alive">Confere</span>
+        <div className="rail__brand">
+          <img alt="Confere" className="rail__brand-logo" src={sidebarLogoUrl} />
         </div>
         <nav className="rail__nav">
           {DESTINATIONS.map((dest) => {

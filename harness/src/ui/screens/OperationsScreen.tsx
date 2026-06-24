@@ -1,4 +1,4 @@
-import { ExternalLink, FileText, Hash, Inbox, RefreshCcw } from "lucide-react";
+import { ExternalLink, Hash, Inbox, RefreshCcw } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { ReactElement } from "react";
 
@@ -6,7 +6,9 @@ import type { OperationSummary } from "../../core/operation-summary.js";
 import { listOperations } from "../api.js";
 import { ActionButton } from "../components/ActionButton.js";
 import { OperationSummaryPanel } from "../components/OperationSummaryPanel.js";
+import { PdfArtifactActions } from "../components/PdfArtifactActions.js";
 import { StatusPill } from "../components/StatusPill.js";
+import { uniqueArtifacts } from "../lib/pdf-artifacts.js";
 
 export function OperationsScreen(): ReactElement {
   const [operations, setOperations] = useState<OperationSummary[]>([]);
@@ -85,15 +87,19 @@ export function OperationsScreen(): ReactElement {
       <div>
         <OperationSummaryPanel operation={selected} />
         <div className="artifact-actions">
-          {(selected?.artifacts ?? []).map((artifact) => (
-            <ActionButton
-              icon={artifact.kind === "pdf" ? FileText : ExternalLink}
-              key={`${artifact.label}-${artifact.path}`}
-              onClick={() => void window.confere?.openPath(artifact.path)}
-            >
-              {artifact.label}
-            </ActionButton>
-          ))}
+          {uniqueArtifacts(selected?.artifacts).map((artifact) =>
+            artifact.kind === "pdf" ? (
+              <PdfArtifactActions artifacts={[artifact]} key={artifact.path || artifact.label} />
+            ) : (
+              <ActionButton
+                icon={ExternalLink}
+                key={`${artifact.label}-${artifact.path}`}
+                onClick={() => void window.confere?.openPath(artifact.path)}
+              >
+                {artifact.label}
+              </ActionButton>
+            )
+          )}
         </div>
       </div>
     </section>

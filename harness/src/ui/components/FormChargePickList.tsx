@@ -3,7 +3,10 @@ import type { ChangeEvent, ReactElement } from "react";
 import type { AgentChoiceView } from "../../server/api-types.js";
 
 function choiceChargeId(choice: AgentChoiceView): string {
-  return String(choice.params?.chargeId ?? choice.id.replace(/^asaas-charge:/, ""));
+  const fromParams = choice.params?.chargeId;
+  if (fromParams) return String(fromParams);
+  const colon = choice.id.indexOf(":");
+  return colon >= 0 ? choice.id.slice(colon + 1) : choice.id;
 }
 
 export function FormChargePickList(props: {

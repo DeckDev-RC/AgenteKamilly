@@ -5,15 +5,16 @@ import {
   CircleDot,
   ClipboardList,
   Command,
+  Copy,
   CornerDownLeft,
   FileDown,
-  FileText,
+  History,
   Loader2,
+  PanelRight,
   Receipt,
   RotateCcw,
   Send,
   ShieldCheck,
-  Sparkles,
   UserPlus
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -21,15 +22,16 @@ import { useEffect, useRef, useState } from "react";
 import type { KeyboardEvent, ReactElement } from "react";
 
 import type { OperationSummary } from "../../core/operation-summary.js";
-import type { Artifact } from "../../core/tool-types.js";
-import type { AgentResultView, ConfirmationSheetView } from "../../server/api-types.js";
-import { executeOperation, getConfirmationSheet, getOperation, runAgentTurn } from "../api.js";
+import type { AgentResultView, ConfirmationSheetView, ConversationSummaryView } from "../../server/api-types.js";
+import { executeOperation, getConfirmationSheet, getOperation, runAgentTurn, listConversations, getConversation, saveConversation, deleteConversation } from "../api.js";
 import { ConfirmationSheet } from "../components/ConfirmationSheet.js";
 import { ChoiceSearchPicker } from "../components/ChoiceSearchPicker.js";
 import { ChoiceSelectList } from "../components/ChoiceSelectList.js";
 import { ChatInlineForm } from "../components/ChatInlineForm.js";
+import { ConversationHistoryPanel } from "../components/ConversationHistoryPanel.js";
 import { PixelynAvatar } from "../components/PixelynAvatar.js";
 import { PlanCard, type PlanFacts } from "../components/PlanCard.js";
+import { PdfArtifactActions } from "../components/PdfArtifactActions.js";
 import {
   pixelynStateFromResult,
   type PixelynPhase,
@@ -37,6 +39,9 @@ import {
 } from "../lib/pixelyn-state.js";
 import { inferChoicePicker } from "../lib/choice-picker.js";
 import { inferInlineForm } from "../lib/inline-form.js";
+import { useMediaQuery } from "../lib/use-media-query.js";
+import { ASSISTANT_NAME } from "../lib/assistant-brand.js";
+import { artifactsFromReceiptData, mergePdfArtifacts } from "../lib/pdf-artifacts.js";
 
 type ChatMessage =
   | {
@@ -90,6 +95,7 @@ const ANCHORED_OPERATIONS: { label: string; action: string; icon: LucideIcon; hi
 const DEFAULT_PENDING_FIELDS = ["Cliente", "Valor", "Vencimento", "Plataforma"];
 
 const FIELD_LABELS: Record<string, string> = {
+  customerId: "Cliente",
   customerName: "Cliente",
   customer: "Cliente",
   value: "Valor da cobrança",
@@ -100,7 +106,9 @@ const FIELD_LABELS: Record<string, string> = {
   module: "Plataforma",
   description: "Descrição",
   tenantId: "Empresa",
+  categoryId: "Categoria",
   categoryName: "Categoria",
+  itemId: "Item",
   itemName: "Item",
   personType: "Tipo de pessoa",
   document: "CPF ou CNPJ",
@@ -124,6 +132,8 @@ const FIELD_LABELS: Record<string, string> = {
   unitValueBr: "Valor unitário",
   serviceDescription: "Descrição do serviço",
   "notification.email": "E-mail de cobrança",
+  "notification.phone": "Telefone de cobrança",
+  "notification.replyTo": "E-mail de contato (opcional)",
   operatorConfirmation: "Confirmação de segurança"
 };
 
@@ -146,6 +156,14 @@ function createSessionId(): string {
   return `confere_${Date.now()}`;
 }
 
+function deriveConversationTitle(messages: ChatMessage[]): string {
+  const firstUser = messages.find((message) => message.role === "user");
+  if (!firstUser || firstUser.role !== "user") return "Nova conversa";
+  const text = firstUser.text.trim();
+  if (!text) return "Nova conversa";
+  return text.length > 60 ? `${text.slice(0, 57)}…` : text;
+}
+
 function createMessageId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -165,10 +183,31 @@ function isDownloadBoletoIntent(result?: AgentResultView): boolean {
   );
 }
 
+function isDueDateUpdateIntent(result?: AgentResultView): boolean {
+  return (
+    result?.intent === "update_charge_due_date" ||
+    result?.intent === "update_due_date_reissue_boleto" ||
+    Boolean(result?.toolName?.includes("update_due_date"))
+  );
+}
+
 function factsFromOperation(
   operation: OperationSummary | undefined,
   result: AgentResultView
 ): PlanFacts {
+  if (isCreateCustomerIntent(result)) {
+    const details = resolveCreateCustomerDetails(result, operation);
+    const receiptData = asReceiptRecord(result.receiptData);
+    const draftPersonType = stringValue(receiptData?.personType);
+    const draftDocument = stringValue(receiptData?.document);
+    return {
+      customerName: details.customerName,
+      document: details.document ?? draftDocument,
+      personType: details.personType ?? draftPersonType,
+      action: planActionLabel(result)
+    };
+  }
+
   const action = planActionLabel(result);
   const receiptData = asReceiptRecord(result.receiptData);
   const approvalPreview = asReceiptRecord(receiptData?.approvalPreview);
@@ -189,8 +228,13 @@ function factsFromOperation(
 }
 
 function planActionLabel(result: AgentResultView): string {
-  if (result.intent === "update_charge_due_date") {
-    return result.provider === "asaas" ? "Alterar vencimento · Asaas" : "Alterar vencimento";
+  if (isCreateCustomerIntent(result)) {
+    return "Cadastrar cliente · Conta Azul";
+  }
+  if (isDueDateUpdateIntent(result)) {
+    return result.intent === "update_due_date_reissue_boleto"
+      ? "Alterar vencimento · Conta Azul"
+      : "Alterar vencimento · Asaas";
   }
   if (result.intent === "download_boleto" || result.intent === "download_boleto_pdf" || result.toolName?.includes("download")) {
     return "Baixar boleto · Asaas";
@@ -249,6 +293,7 @@ function isLiveFailure(result?: AgentResultView, operation?: OperationSummary): 
 type DueDateUpdateDetails = {
   customerName?: string;
   chargeId?: string;
+  chargeLabel?: string;
   dueDateBr?: string;
 };
 
@@ -280,11 +325,74 @@ function resolveDownloadBoletoDetails(
   };
 }
 
+function resolveCreateCustomerHandoff(resolved: unknown): {
+  customerId?: string;
+  customerName?: string;
+  tenantId?: string | number;
+  relationId?: string;
+  tenantName?: string;
+} | undefined {
+  if (!resolved || typeof resolved !== "object") return undefined;
+  const record = resolved as Record<string, unknown>;
+  const customerId = stringValue(record.customerId);
+  const customerName = stringValue(record.customerName) ?? stringValue(record.name);
+  const relationId = stringValue(record.relationId);
+  const tenantId = record.tenantId;
+  if (!customerId && !customerName) return undefined;
+  return {
+    customerId,
+    customerName,
+    tenantId: typeof tenantId === "number" || typeof tenantId === "string" ? tenantId : undefined,
+    relationId,
+    tenantName: stringValue(record.tenantName)
+  };
+}
+
+function isCreateCustomerIntent(result?: AgentResultView): boolean {
+  return (
+    result?.intent === "create_customer" ||
+    result?.toolName === "contaazul.interactive_create_customer" ||
+    result?.toolName === "contaazul.create_customer_workflow"
+  );
+}
+
+type CreateCustomerDetails = {
+  personType?: string;
+  document?: string;
+  customerName?: string;
+};
+
+function resolveCreateCustomerDetails(
+  result: AgentResultView,
+  operation?: OperationSummary
+): CreateCustomerDetails {
+  const receiptData = asReceiptRecord(result.receiptData);
+  const approvalPreview = asReceiptRecord(receiptData?.approvalPreview);
+  const target = asReceiptRecord(approvalPreview?.target);
+  const resolved = asReceiptRecord(receiptData?.resolved);
+  const defaults = result.formDefaults ?? {};
+
+  return {
+    personType:
+      stringValue(defaults.personType) ??
+      stringValue(receiptData?.personType),
+    document:
+      stringValue(defaults.document) ??
+      stringValue(receiptData?.document),
+    customerName:
+      operation?.customerName ??
+      stringValue(resolved?.customerName) ??
+      stringValue(target?.customerName) ??
+      stringValue(defaults.name)
+  };
+}
+
 function resolveDueDateUpdateDetails(
   result: AgentResultView,
   operation?: OperationSummary
 ): DueDateUpdateDetails {
   const receiptData = asReceiptRecord(result.receiptData);
+  const resultRecord = asReceiptRecord(receiptData?.result);
   const approvalPreview = asReceiptRecord(receiptData?.approvalPreview);
   const target = asReceiptRecord(approvalPreview?.target);
   const changes = Array.isArray(approvalPreview?.changes) ? approvalPreview.changes : [];
@@ -294,40 +402,67 @@ function resolveDueDateUpdateDetails(
 
   return {
     customerName: operation?.customerName ?? stringValue(receiptData?.customerName),
+    chargeLabel:
+      stringValue(receiptData?.chargeLabel) ?? stringValue(resultRecord?.originalDescription),
     chargeId:
       operation?.chargeId ??
+      stringValue(receiptData?.chargeRequestId) ??
+      stringValue(target?.installmentId) ??
       stringValue(target?.chargeId) ??
-      stringValue(receiptData?.chargeId),
+      stringValue(receiptData?.chargeId) ??
+      stringValue(resultRecord?.installmentId),
     dueDateBr:
       operation?.dueDateBr ??
       operation?.dueDateIso ??
+      formatDateBr(stringValue(receiptData?.dueDateBr)) ??
       formatDateBr(stringValue(dueDateChange?.to)) ??
-      formatDateBr(stringValue(receiptData?.dueDateBr))
+      formatDateBr(stringValue(receiptData?.dueDateIso)) ??
+      formatDateBr(stringValue(resultRecord?.dueDateIso))
   };
 }
 
 function operationSuccessMessage(result: AgentResultView, operation?: OperationSummary): string {
-  if (result.intent === "update_charge_due_date") {
+  if (isDueDateUpdateIntent(result)) {
     const details = resolveDueDateUpdateDetails(result, operation);
     const hasPdf =
       (operation?.artifacts ?? []).some((artifact) => artifact.kind === "pdf") ||
       artifactsFromReceiptData(result.receiptData).some((artifact) => artifact.kind === "pdf");
+    const providerLabel = result.intent === "update_due_date_reissue_boleto" ? "Conta Azul" : "Asaas";
+    const chargeRef = details.chargeLabel
+      ? details.chargeLabel
+      : details.chargeId
+        ? `cobrança ${details.chargeId}`
+        : "cobrança";
 
-    if (details.chargeId && details.dueDateBr) {
+    if (details.dueDateBr) {
       const who = details.customerName ? ` de ${details.customerName}` : "";
       if (hasPdf) {
-        return `Vencimento alterado com sucesso${who}! Cobrança ${details.chargeId} agora vence em ${details.dueDateBr}. Baixe o PDF atualizado abaixo.`;
+        return `Vencimento alterado com sucesso${who} no ${providerLabel}! ${chargeRef} agora vence em ${details.dueDateBr}. Baixe o PDF atualizado abaixo.`;
       }
-      return `Vencimento alterado com sucesso${who}! Cobrança ${details.chargeId} agora vence em ${details.dueDateBr}.`;
+      return `Vencimento alterado com sucesso${who} no ${providerLabel}! ${chargeRef} agora vence em ${details.dueDateBr}.`;
     }
-    return operation?.summary ?? result.summary ?? "Vencimento atualizado no Asaas.";
+    return (
+      operation?.summary ??
+      result.summary ??
+      `Vencimento atualizado no ${providerLabel}.`
+    );
   }
 
   if (isDownloadBoletoIntent(result)) {
     const details = resolveDownloadBoletoDetails(result, operation);
     const who = details.customerName ? ` de ${details.customerName}` : "";
-    const chargeRef = details.chargeId ? ` (cobrança ${details.chargeId})` : "";
-    return `PDF do boleto${who}${chargeRef} baixado com sucesso. Abra o arquivo abaixo.`;
+    const chargeRef = details.chargeLabel
+      ? ` (${details.chargeLabel}${details.chargeId ? ` · #${details.chargeId}` : ""})`
+      : details.chargeId
+        ? ` (cobrança ${details.chargeId})`
+        : "";
+    return `PDF do boleto${who}${chargeRef} baixado com sucesso. Abra ou salve o arquivo abaixo.`;
+  }
+
+  if (isCreateCustomerIntent(result)) {
+    const details = resolveCreateCustomerDetails(result, operation);
+    const who = details.customerName ? ` para ${details.customerName}` : "";
+    return `Cliente cadastrado com sucesso${who} no Conta Azul.`;
   }
 
   const sale = operation?.saleNumber;
@@ -337,11 +472,15 @@ function operationSuccessMessage(result: AgentResultView, operation?: OperationS
 }
 
 function operationFailureMessage(result: AgentResultView, operation?: OperationSummary): string {
-  if (result.intent === "update_charge_due_date") {
-    return operation?.summary ?? "Não foi possível alterar o vencimento no Asaas.";
+  if (isDueDateUpdateIntent(result)) {
+    const providerLabel = result.intent === "update_due_date_reissue_boleto" ? "Conta Azul" : "Asaas";
+    return operation?.summary ?? `Não foi possível alterar o vencimento no ${providerLabel}.`;
   }
   if (isDownloadBoletoIntent(result)) {
     return operation?.summary ?? result.summary ?? "Não foi possível baixar o PDF do boleto.";
+  }
+  if (isCreateCustomerIntent(result)) {
+    return operation?.summary ?? result.summary ?? "Não foi possível cadastrar o cliente no Conta Azul.";
   }
   return operation?.summary ?? "A emissão falhou. Veja os detalhes abaixo ou no histórico de operações.";
 }
@@ -354,11 +493,14 @@ function messageSummary(result: AgentResultView, operation?: OperationSummary): 
     return operationFailureMessage(result, operation);
   }
   if (result.receiptStatus === "planned") {
-    if (result.intent === "update_charge_due_date") {
+    if (isDueDateUpdateIntent(result)) {
       return "Dry-run concluído. Revise os dados e aprove para alterar o vencimento e baixar o boleto atualizado.";
     }
     if (isDownloadBoletoIntent(result)) {
       return "PDF do boleto preparado. Abra o arquivo abaixo.";
+    }
+    if (isCreateCustomerIntent(result)) {
+      return "Dry-run concluído. Revise os dados e aprove para cadastrar o cliente de verdade.";
     }
     return "Dry-run concluído. Revise os dados e aprove para emitir o boleto de verdade.";
   }
@@ -372,11 +514,14 @@ function statusLabel(
 ): { label: string; tone: "idle" | "working" | "ready" | "blocked" | "done" } {
   if (phase === "preparing") return { label: "Pensando", tone: "working" };
   if (phase === "executing") {
-    if (result?.intent === "update_charge_due_date") {
+    if (isDueDateUpdateIntent(result)) {
       return { label: "Alterando vencimento…", tone: "working" };
     }
     if (isDownloadBoletoIntent(result)) {
       return { label: "Baixando PDF…", tone: "working" };
+    }
+    if (isCreateCustomerIntent(result)) {
+      return { label: "Cadastrando cliente…", tone: "working" };
     }
     return { label: "Emitindo boleto…", tone: "working" };
   }
@@ -413,11 +558,14 @@ function assistantFallback(result: AgentResultView): string {
     return "Preparei um dry-run para revisão.";
   }
   if (result.status === "executed" && result.receiptStatus === "planned") {
-    if (result.intent === "update_charge_due_date") {
+    if (isDueDateUpdateIntent(result)) {
       return "Dry-run concluído. Revise os dados e aprove para alterar o vencimento e baixar o boleto atualizado.";
     }
     if (isDownloadBoletoIntent(result)) {
       return "PDF do boleto preparado. Abra o arquivo abaixo.";
+    }
+    if (isCreateCustomerIntent(result)) {
+      return "Dry-run concluído. Revise os dados e aprove para cadastrar o cliente de verdade.";
     }
     return "Dry-run concluído. Revise os dados e aprove para emitir o boleto de verdade.";
   }
@@ -438,23 +586,25 @@ function DueDateUpdateResultCard(props: {
   result: AgentResultView;
   operation?: OperationSummary;
 }): ReactElement | null {
-  if (props.result.intent !== "update_charge_due_date" || !isLiveSuccess(props.result, props.operation)) {
+  if (!isDueDateUpdateIntent(props.result) || !isLiveSuccess(props.result, props.operation)) {
     return null;
   }
 
   const details = resolveDueDateUpdateDetails(props.result, props.operation);
-  if (!details.chargeId && !details.dueDateBr) return null;
+  if (!details.chargeId && !details.dueDateBr && !details.chargeLabel) return null;
 
-  const pdfArtifacts = [
-    ...(props.operation?.artifacts ?? []),
-    ...artifactsFromReceiptData(props.result.receiptData)
-  ].filter((artifact) => artifact.kind === "pdf");
+  const pdfArtifacts = mergePdfArtifacts({
+    operation: props.operation,
+    receiptData: props.result.receiptData
+  });
+  const providerLabel =
+    props.result.intent === "update_due_date_reissue_boleto" ? "Conta Azul" : "Asaas";
 
   return (
     <div className="followup followup--success">
       <p className="followup__title">
         <CheckCircle2 aria-hidden="true" size={16} />
-        Alteração registrada no Asaas
+        Alteração registrada no {providerLabel}
       </p>
       <dl className="operation-preview__facts operation-preview__facts--inline">
         {details.customerName ? (
@@ -463,9 +613,14 @@ function DueDateUpdateResultCard(props: {
             <dd>{details.customerName}</dd>
           </div>
         ) : null}
-        {details.chargeId ? (
+        {details.chargeLabel ? (
           <div>
             <dt>Cobrança</dt>
+            <dd>{details.chargeLabel}</dd>
+          </div>
+        ) : details.chargeId ? (
+          <div>
+            <dt>Parcela</dt>
             <dd>{details.chargeId}</dd>
           </div>
         ) : null}
@@ -476,20 +631,16 @@ function DueDateUpdateResultCard(props: {
           </div>
         ) : null}
       </dl>
+      {props.operation?.chargeUrl ? (
+        <p className="followup__text">
+          Link da fatura:{" "}
+          <a href={props.operation.chargeUrl} rel="noreferrer" target="_blank">
+            abrir no Conta Azul
+          </a>
+        </p>
+      ) : null}
       {pdfArtifacts.length > 0 ? (
-        <div className="followup__actions">
-          {pdfArtifacts.map((artifact) => (
-            <button
-              className="pill-btn pill-btn--primary"
-              key={`${artifact.label}-${artifact.path}`}
-              onClick={() => void window.confere?.openPath(artifact.path)}
-              type="button"
-            >
-              <FileText aria-hidden="true" size={16} />
-              {artifact.label || "Abrir PDF do boleto"}
-            </button>
-          ))}
-        </div>
+        <PdfArtifactActions artifacts={pdfArtifacts} />
       ) : (
         <p className="followup__text">
           O vencimento foi alterado, mas o PDF ainda não ficou disponível nesta sessão.
@@ -508,10 +659,11 @@ function DownloadBoletoResultCard(props: {
   }
 
   const details = resolveDownloadBoletoDetails(props.result, props.operation);
-  const pdfArtifacts = [
-    ...(props.operation?.artifacts ?? []),
-    ...artifactsFromReceiptData(props.result.receiptData)
-  ].filter((artifact) => artifact.kind === "pdf");
+  const pdfArtifacts = mergePdfArtifacts({
+    operation: props.operation,
+    receiptData: props.result.receiptData
+  });
+  const pdfHint = details.chargeLabel ?? details.chargeId;
 
   return (
     <div className="followup followup--success">
@@ -526,10 +678,14 @@ function DownloadBoletoResultCard(props: {
             <dd>{details.customerName}</dd>
           </div>
         ) : null}
-        {details.chargeId ? (
+        {details.chargeLabel || details.chargeId ? (
           <div>
             <dt>Cobrança</dt>
-            <dd>{details.chargeId}</dd>
+            <dd>
+              {details.chargeLabel
+                ? `${details.chargeLabel}${details.chargeId ? ` (#${details.chargeId})` : ""}`
+                : details.chargeId}
+            </dd>
           </div>
         ) : null}
         {details.valueBr ? (
@@ -546,19 +702,7 @@ function DownloadBoletoResultCard(props: {
         ) : null}
       </dl>
       {pdfArtifacts.length > 0 ? (
-        <div className="followup__actions">
-          {pdfArtifacts.map((artifact) => (
-            <button
-              className="pill-btn pill-btn--primary"
-              key={`${artifact.label}-${artifact.path}`}
-              onClick={() => void window.confere?.openPath(artifact.path)}
-              type="button"
-            >
-              <FileText aria-hidden="true" size={16} />
-              {artifact.label || "Abrir PDF do boleto"}
-            </button>
-          ))}
-        </div>
+        <PdfArtifactActions artifacts={pdfArtifacts} className="followup__actions" hint={pdfHint} />
       ) : (
         <p className="followup__text">
           O download foi registrado, mas o PDF ainda não ficou disponível nesta sessão.
@@ -579,16 +723,17 @@ function OperationArtifactsCard(props: {
     return null;
   }
   if (
-    props.intent === "update_charge_due_date" ||
+    isDueDateUpdateIntent({ intent: props.intent } as AgentResultView) ||
     props.intent === "download_boleto" ||
     props.intent === "download_boleto_pdf"
   ) {
     return null;
   }
 
-  const receiptArtifacts = artifactsFromReceiptData(props.receiptData);
-  const artifacts = props.operation?.artifacts ?? receiptArtifacts;
-  const pdfArtifacts = artifacts.filter((artifact) => artifact.kind === "pdf");
+  const pdfArtifacts = mergePdfArtifacts({
+    operation: props.operation,
+    receiptData: props.receiptData
+  });
   if (!props.failed && pdfArtifacts.length === 0) return null;
 
   return (
@@ -613,30 +758,12 @@ function OperationArtifactsCard(props: {
         </p>
       ) : null}
         {pdfArtifacts.length > 0 ? (
-        <div className="followup__actions artifact-actions">
-          {pdfArtifacts.map((artifact) => (
-            <button
-              className="pill-btn pill-btn--primary"
-              key={`${artifact.label}-${artifact.path}`}
-              onClick={() => void window.confere?.openPath(artifact.path)}
-              type="button"
-            >
-              <FileText aria-hidden="true" size={16} />
-              {artifact.label || "Abrir PDF do boleto"}
-            </button>
-          ))}
-        </div>
+        <PdfArtifactActions artifacts={pdfArtifacts} className="followup__actions artifact-actions" />
       ) : props.failed ? (
         <p className="followup__text">Consulte Operações no menu lateral para ver o histórico completo.</p>
       ) : null}
     </div>
   );
-}
-
-function artifactsFromReceiptData(receiptData: unknown): OperationSummary["artifacts"] {
-  if (!receiptData || typeof receiptData !== "object") return [];
-  const artifacts = (receiptData as { artifacts?: OperationSummary["artifacts"] }).artifacts;
-  return Array.isArray(artifacts) ? artifacts : [];
 }
 
 function UserMessage(props: { text: string; timestamp: string }): ReactElement {
@@ -653,6 +780,7 @@ function UserMessage(props: { text: string; timestamp: string }): ReactElement {
 export function AssistantResultMessage(props: {
   message: Extract<ChatMessage, { role: "assistant" }>;
   isLatest: boolean;
+  busy?: boolean;
   onReview: (operationId: string) => void;
   onSend: (text: string, params?: Record<string, unknown>) => void;
 }): ReactElement {
@@ -666,7 +794,7 @@ export function AssistantResultMessage(props: {
     ? result.receiptData
     : [];
 
-  const isCreateCustomer = result.toolName === "contaazul.create_customer_workflow";
+  const isCreateCustomer = isCreateCustomerIntent(result);
   const choicePicker = inferChoicePicker(result);
   const inlineForm = inferInlineForm(result);
   const showInlineForm = props.isLatest && inlineForm !== null;
@@ -676,7 +804,7 @@ export function AssistantResultMessage(props: {
     choicePicker !== null &&
     (choicePicker.allowCreate === true || (result.choices?.length ?? 0) > 0);
   const resolvedCustomer = (isCreateCustomer && result.receiptStatus === "succeeded" && result.receiptData && typeof result.receiptData === "object")
-    ? (result.receiptData as any).resolved
+    ? resolveCreateCustomerHandoff((result.receiptData as Record<string, unknown>).resolved)
     : undefined;
 
   function handleUpdateDueDate(item: any) {
@@ -701,16 +829,21 @@ export function AssistantResultMessage(props: {
 
   return (
     <article className="chat-message chat-message--assistant">
-      <PixelynAvatar context="chat" state={pixelynStateFromResult(result, "idle")} />
+      <PixelynAvatar
+        context="chat"
+        playing={props.isLatest}
+        state={pixelynStateFromResult(result, "idle")}
+      />
       <div className="chat-message__stack">
         <header className="chat-message__meta">
-          <strong>Pixelyn</strong>
+          <strong>{ASSISTANT_NAME}</strong>
           <span>{props.message.timestamp}</span>
         </header>
         <div className="chat-message__body chat-message__body--assistant">
           <p className="assistant__say">{summary}</p>
           {showInlineForm && inlineForm ? (
             <ChatInlineForm
+              busy={props.busy}
               definition={inlineForm}
               onSubmit={(text, params) => props.onSend(text, params)}
               result={result}
@@ -887,8 +1020,11 @@ export function AssistantResultMessage(props: {
 
 const FIELD_QUESTIONS: Record<string, string> = {
   tenantId: "Selecione a empresa contábil no Conta Azul.",
+  customerId: "Selecione o cliente para esta venda.",
   customerName: "Busque e selecione o cliente.",
+  categoryId: "Busque e selecione a categoria de receita.",
   categoryName: "Busque e selecione a categoria de receita.",
+  itemId: "Busque e selecione o item de serviço.",
   itemName: "Busque e selecione o item de serviço.",
   personType: "O cliente é Pessoa Física ou Jurídica?",
   document: "Informe o CPF ou CNPJ do cliente.",
@@ -897,6 +1033,7 @@ const FIELD_QUESTIONS: Record<string, string> = {
   dueDateIso: "Informe a data de vencimento.",
   serviceDescription: "Informe a descrição do serviço.",
   "notification.email": "Informe o e-mail de cobrança do cliente.",
+  "notification.replyTo": "Informe um e-mail de contato, se desejar.",
   name: "Qual o nome completo do cliente?",
   companyName: "Qual a razão social da empresa?",
   email: "Qual o e-mail do cliente?",
@@ -938,254 +1075,371 @@ function QuestionChecklist(props: {
   );
 }
 
+const PREPARING_PHRASES = [
+  `${ASSISTANT_NAME} está preparando…`,
+  "Conferindo os dados…",
+  "Organizando a operação…",
+  "Quase lá…"
+];
+
 function TypingIndicator(): ReactElement {
+  const [phraseIndex, setPhraseIndex] = useState(0);
+  const [phraseVisible, setPhraseVisible] = useState(true);
+
+  // Cicla as frases com um cross-fade: a Kawaii parece "fazendo coisas"
+  // (progresso) em vez de só repetir um spinner estático.
+  useEffect(() => {
+    const cycle = window.setInterval(() => {
+      setPhraseVisible(false);
+      window.setTimeout(() => {
+        setPhraseIndex((index) => (index + 1) % PREPARING_PHRASES.length);
+        setPhraseVisible(true);
+      }, 320);
+    }, 1900);
+    return () => window.clearInterval(cycle);
+  }, []);
+
   return (
     <article className="chat-message chat-message--assistant chat-message--typing">
       <PixelynAvatar context="chat" state="pensando" />
-      <div className="typing-pill">
-        <Loader2 aria-hidden="true" size={15} />
-        Pixelyn está preparando...
-        <span className="typing-dots" aria-hidden="true">
+      <div className="typing-pill" role="status" aria-label={`${ASSISTANT_NAME} está preparando a operação`}>
+        <span className="typing-bars" aria-hidden="true">
           <i />
           <i />
           <i />
+          <i />
+        </span>
+        <span
+          aria-hidden="true"
+          className={`typing-pill__text${phraseVisible ? "" : " typing-pill__text--out"}`}
+        >
+          {PREPARING_PHRASES[phraseIndex]}
         </span>
       </div>
     </article>
   );
 }
 
-function OperationContextPanel(props: {
+type PanelStage = "idle" | "input" | "working" | "review" | "done" | "failed";
+
+/**
+ * Reduz o estado da operação a um único discriminador de estágio. O painel se
+ * reorganiza por estágio, então toda a lógica de "o que mostrar" deriva daqui —
+ * em vez de ternários aninhados espalhados pelo JSX.
+ *
+ * A ordem importa: `working` vence `done/failed` porque, ao iniciar um novo
+ * turno, o `result` anterior (já concluído) ainda vive no estado até a resposta
+ * chegar; sem isso o painel mostraria "concluído" enquanto processa o próximo.
+ */
+function panelStage(
+  result: AgentResultView | undefined,
+  operation: OperationSummary | undefined,
+  phase: PixelynPhase
+): PanelStage {
+  if (phase === "preparing" || phase === "executing") return "working";
+  if (isLiveSuccess(result, operation)) return "done";
+  if (isLiveFailure(result, operation)) return "failed";
+  if (!result) return "idle";
+  if (result.receiptStatus === "planned" || result.status === "planned") return "review";
+  if (result.status === "needs_input" || result.missingFields.length > 0) return "input";
+  return "idle";
+}
+
+function stageHeroIcon(stage: PanelStage): { Icon: LucideIcon; spin: boolean } {
+  switch (stage) {
+    case "working":
+      return { Icon: Loader2, spin: true };
+    case "done":
+      return { Icon: CheckCircle2, spin: false };
+    case "failed":
+      return { Icon: AlertTriangle, spin: false };
+    case "review":
+      return { Icon: ShieldCheck, spin: false };
+    default:
+      return { Icon: ClipboardList, spin: false };
+  }
+}
+
+export function OperationContextPanel(props: {
   result: AgentResultView | undefined;
   operation: OperationSummary | undefined;
   draftOperationId: string | undefined;
   phase: PixelynPhase;
+  className?: string;
 }): ReactElement {
   const status = statusLabel(props.result, props.phase, props.operation);
   const suggested = moduleSuggestion(props.result);
-  const liveDone = isLiveSuccess(props.result, props.operation);
-  const liveFailed = isLiveFailure(props.result, props.operation);
-  const pdfArtifacts = liveDone
-    ? [
-        ...(props.operation?.artifacts ?? []),
-        ...artifactsFromReceiptData(props.result?.receiptData)
-      ].filter((artifact) => artifact.kind === "pdf")
-    : [];
-  const isDueDateUpdate = props.result?.intent === "update_charge_due_date";
+  const stage = panelStage(props.result, props.operation, props.phase);
+  const isDueDateUpdate = isDueDateUpdateIntent(props.result);
   const isDownloadBoleto = isDownloadBoletoIntent(props.result);
+  const isCreateCustomer = isCreateCustomerIntent(props.result);
+  const createCustomerDetails = props.result
+    ? resolveCreateCustomerDetails(props.result, props.operation)
+    : undefined;
   const dueDateDetails = props.result
     ? resolveDueDateUpdateDetails(props.result, props.operation)
     : undefined;
   const downloadDetails = props.result
     ? resolveDownloadBoletoDetails(props.result, props.operation)
     : undefined;
-  const previewTitle = isDueDateUpdate
-    ? "Alterar vencimento"
-    : isDownloadBoleto
-      ? "Baixar boleto"
-      : props.result?.toolName?.includes("contaazul")
-        ? "Venda + boleto"
-        : "Boleto avulso";
-  const liveDoneMessage = isDueDateUpdate
-    ? pdfArtifacts.length > 0
-      ? "O vencimento foi atualizado e o PDF do boleto foi baixado."
-      : "O vencimento foi atualizado no Asaas."
-    : isDownloadBoleto
-      ? "O PDF do boleto foi baixado do Asaas."
-      : suggested === "asaas"
-        ? "O boleto foi registrado no Asaas."
-        : "A venda e o boleto foram registrados no Conta Azul.";
-  const panelHeading = liveDone
-    ? isDueDateUpdate
-      ? "Alteração concluída"
-      : isDownloadBoleto
-        ? "Download concluído"
-        : "Operação concluída"
-    : liveFailed
-      ? "Operação com falha"
+
+  // O PDF só vira herói quando a operação está realmente concluída.
+  const pdfArtifacts =
+    stage === "done"
+      ? mergePdfArtifacts({ operation: props.operation, receiptData: props.result?.receiptData })
+      : [];
+
+  const previewTitle = isCreateCustomer
+    ? "Cadastrar cliente"
+    : isDueDateUpdate
+      ? "Alterar vencimento"
       : isDownloadBoleto
         ? "Baixar boleto"
-        : "Operação em preparo";
-  const panelSubtitle = liveDone
-    ? isDueDateUpdate
-      ? pdfArtifacts.length > 0
-        ? "O vencimento foi atualizado e o PDF está disponível."
-        : "O vencimento da cobrança foi atualizado."
-      : isDownloadBoleto
-        ? "O PDF está disponível para abrir ou salvar."
-        : "O boleto foi emitido e o PDF está disponível."
-    : liveFailed
-      ? "Revise o histórico para entender o que falhou."
-      : isDownloadBoleto
-        ? "Selecione a cobrança e baixe a segunda via em PDF."
-        : "Rascunho seguro antes de qualquer execução real.";
+        : props.result?.toolName?.includes("contaazul")
+          ? "Venda + boleto"
+          : "Boleto avulso";
+
+  const panelHeading =
+    stage === "done"
+      ? isDueDateUpdate
+        ? "Alteração concluída"
+        : isDownloadBoleto
+          ? "Download concluído"
+          : isCreateCustomer
+            ? "Cadastro concluído"
+            : "Operação concluída"
+      : stage === "failed"
+        ? "Operação com falha"
+        : isDownloadBoleto
+          ? "Baixar boleto"
+          : isCreateCustomer
+            ? "Cadastrar cliente"
+            : "Operação em preparo";
+
+  const panelSubtitle =
+    stage === "done"
+      ? isDueDateUpdate
+        ? pdfArtifacts.length > 0
+          ? "O vencimento foi atualizado e o PDF está disponível."
+          : "O vencimento da cobrança foi atualizado."
+        : isDownloadBoleto
+          ? "O PDF está disponível para abrir ou salvar."
+          : isCreateCustomer
+            ? "O cliente está disponível para emitir boletos."
+            : "O boleto foi emitido e o PDF está disponível."
+      : stage === "failed"
+        ? "Revise o histórico para entender o que falhou."
+        : isDownloadBoleto
+          ? "Selecione a cobrança e baixe a segunda via em PDF."
+          : isCreateCustomer
+            ? "Preencha o formulário e prepare o cadastro no Conta Azul."
+            : "Rascunho seguro antes de qualquer execução real.";
+
+  // Durante o processamento o heading anterior pode estar obsoleto, então o
+  // herói usa um texto neutro próprio em vez de `panelHeading`.
+  const heroTitle = stage === "working" ? "Processando operação" : panelHeading;
+  const heroSubtitle = stage === "working" ? "Sincronizando com o provedor…" : panelSubtitle;
+
   const pendingFields = props.result?.missingFields.length
     ? props.result.missingFields.map(formatField)
     : props.result
       ? []
       : DEFAULT_PENDING_FIELDS;
+  const showPending = (stage === "idle" || stage === "input") && pendingFields.length > 0;
+  const showTrust = stage !== "done" && stage !== "failed";
+  const trustText = isDownloadBoleto
+    ? "Download é somente leitura — não altera cobranças no Asaas."
+    : isCreateCustomer
+      ? "Dry-run primeiro — o cadastro real pede confirmação."
+      : "Dry-run primeiro — a execução real pede confirmação.";
+
+  const moduleMark = suggested === "asaas" ? "A" : "C";
+  const moduleName =
+    suggested === "asaas" ? "Asaas" : suggested === "contaazul" ? "Conta Azul" : "Aguardando módulo";
+  const moduleMarkClass =
+    suggested === "asaas"
+      ? "op-summary__mark--asaas"
+      : suggested === "contaazul"
+        ? "op-summary__mark--contaazul"
+        : "op-summary__mark--idle";
+
+  const pdfTitle = isDueDateUpdate
+    ? "Boleto reemitido"
+    : isDownloadBoleto
+      ? "Segunda via do boleto"
+      : "Boleto emitido";
+  const pdfDueDate = isDownloadBoleto
+    ? downloadDetails?.dueDateBr
+    : formatDate(props.operation?.dueDateIso) ?? dueDateDetails?.dueDateBr;
+  const pdfSubtitle = pdfDueDate ? `PDF pronto • vence ${pdfDueDate}` : "PDF pronto para abrir ou salvar";
+
+  const opId = props.draftOperationId ?? props.operation?.operationId;
+  const { Icon: HeroIcon, spin } = stageHeroIcon(stage);
 
   return (
-    <aside className="operation-panel">
-      <header className="operation-panel__header">
-        <div>
-          <h2>{panelHeading}</h2>
-          <p>{panelSubtitle}</p>
-        </div>
-        <span className="operation-panel__spark" aria-hidden="true">
-          <Sparkles size={18} />
+    <aside className={["operation-panel", props.className].filter(Boolean).join(" ")}>
+      <div className="op-panel__eyebrow">
+        <span className="op-panel__kicker">
+          {stage === "done" || stage === "failed" ? "Operação" : "Rascunho"}
         </span>
+        <strong className={`op-badge op-badge--${status.tone}`}>
+          <CircleDot aria-hidden="true" size={11} />
+          {status.label}
+        </strong>
+      </div>
+
+      <header className={`op-hero op-hero--${stage}`}>
+        <span className="op-hero__icon">
+          <HeroIcon
+            aria-hidden="true"
+            size={20}
+            className={spin ? "op-hero__spinner" : undefined}
+          />
+        </span>
+        <div className="op-hero__copy">
+          <h2>{heroTitle}</h2>
+          <p>{heroSubtitle}</p>
+        </div>
       </header>
 
-      <section className="operation-panel__section">
-        <div className="operation-status">
-          <span>Status atual</span>
-          <strong className={`operation-status__badge operation-status__badge--${status.tone}`}>
-            <CircleDot aria-hidden="true" size={12} />
-            {status.label}
-          </strong>
-        </div>
-        <div className="operation-id">
-          <span>ID da operação</span>
-          <code>{props.draftOperationId ?? props.operation?.operationId ?? "ainda não gerada"}</code>
-        </div>
-      </section>
-
-      <section className="operation-panel__section">
-        <h3>Módulo sugerido</h3>
-        <div className="module-choice">
-          <div className={`module-choice__item ${suggested === "asaas" ? "module-choice__item--active" : ""}`}>
-            <span className="module-choice__mark module-choice__mark--asaas">A</span>
-            <div>
-              <strong>Asaas</strong>
-              <p>Boletos e cobranças</p>
+      {stage === "done" && pdfArtifacts.length > 0 ? (
+        <section className="op-pdf">
+          <div className="op-pdf__head">
+            <span className="op-pdf__icon" aria-hidden="true">
+              <FileDown size={20} />
+            </span>
+            <div className="op-pdf__copy">
+              <strong>{pdfTitle}</strong>
+              <p>{pdfSubtitle}</p>
             </div>
-            <CheckCircle2 aria-hidden="true" size={16} />
           </div>
-          <div className={`module-choice__item ${suggested === "contaazul" ? "module-choice__item--active" : ""}`}>
-            <span className="module-choice__mark module-choice__mark--contaazul">C</span>
-            <div>
-              <strong>Conta Azul</strong>
-              <p>Vendas e boleto</p>
-            </div>
-            <CheckCircle2 aria-hidden="true" size={16} />
+          <PdfArtifactActions
+            artifacts={pdfArtifacts}
+            className="op-pdf__actions"
+            hint={
+              isDownloadBoleto ? downloadDetails?.chargeLabel ?? downloadDetails?.chargeId : undefined
+            }
+          />
+        </section>
+      ) : null}
+
+      <section className="op-summary">
+        <div className="op-summary__head">
+          <span className={`op-summary__mark ${moduleMarkClass}`}>{moduleMark}</span>
+          <div className="op-summary__title">
+            <strong>{previewTitle}</strong>
+            <p>{moduleName}</p>
           </div>
         </div>
+        <dl className="op-facts">
+          {isCreateCustomer ? (
+            <>
+              <div>
+                <dt>Tipo</dt>
+                <dd>{createCustomerDetails?.personType ?? "--"}</dd>
+              </div>
+              <div>
+                <dt>Documento</dt>
+                <dd>{createCustomerDetails?.document ?? "--"}</dd>
+              </div>
+              <div>
+                <dt>Nome</dt>
+                <dd>{createCustomerDetails?.customerName ?? "--"}</dd>
+              </div>
+            </>
+          ) : (
+            <>
+              <div>
+                <dt>Cliente</dt>
+                <dd>{dueDateDetails?.customerName ?? props.operation?.customerName ?? "--"}</dd>
+              </div>
+              {isDueDateUpdate || isDownloadBoleto ? (
+                <div>
+                  <dt>Cobrança</dt>
+                  <dd>
+                    {isDownloadBoleto
+                      ? downloadDetails?.chargeId ?? props.operation?.chargeId ?? "--"
+                      : dueDateDetails?.chargeId ?? props.operation?.chargeId ?? "--"}
+                  </dd>
+                </div>
+              ) : (
+                <div>
+                  <dt>Valor</dt>
+                  <dd>{formatMoney(props.operation?.unitValue) ?? "R$ --,--"}</dd>
+                </div>
+              )}
+              {isDownloadBoleto ? (
+                <div>
+                  <dt>Valor</dt>
+                  <dd>{downloadDetails?.valueBr ?? "R$ --,--"}</dd>
+                </div>
+              ) : null}
+              <div>
+                <dt>{isDueDateUpdate ? "Novo vencimento" : "Vencimento"}</dt>
+                <dd>
+                  {isDownloadBoleto
+                    ? downloadDetails?.dueDateBr ?? "--/--/----"
+                    : formatDate(props.operation?.dueDateIso) ??
+                      dueDateDetails?.dueDateBr ??
+                      "--/--/----"}
+                </dd>
+              </div>
+            </>
+          )}
+        </dl>
       </section>
 
-      <section className="operation-panel__section">
-        <div className="section-title-row">
-          <h3>Campos pendentes</h3>
-          <span>{pendingFields.length === 0 ? "ok" : `${pendingFields.length}`}</span>
-        </div>
-        <ol className="pending-list">
-          {pendingFields.length > 0 ? (
-            pendingFields.map((field, index) => (
+      {showPending ? (
+        <section className="op-pending">
+          <div className="op-pending__head">
+            <h3>Campos pendentes</h3>
+            <span>{pendingFields.length}</span>
+          </div>
+          <ol className="op-pending__list">
+            {pendingFields.map((field, index) => (
               <li key={`${field}-${index}`}>
                 <span>{index + 1}</span>
                 {field}
               </li>
-            ))
-          ) : (
-            <li className="pending-list__done">
-              <CheckCircle2 aria-hidden="true" size={15} />
-              Nenhum campo pendente
-            </li>
-          )}
-        </ol>
-      </section>
-
-      <section className="security-card">
-        <ShieldCheck aria-hidden="true" size={19} />
-        <div>
-          <strong>
-            {liveDone
-              ? isDueDateUpdate
-                ? "Alteração concluída"
-                : isDownloadBoleto
-                  ? "Download concluído"
-                  : "Emissão concluída"
-              : isDownloadBoleto
-                ? "Consulta ao Asaas"
-                : "Gate de segurança"}
-          </strong>
-          <p>
-            {liveDone
-              ? liveDoneMessage
-              : isDownloadBoleto
-                ? "Download de PDF é somente leitura — não altera cobranças no Asaas."
-                : "Dry-run primeiro. A execução real continua exigindo confirmação final."}
-          </p>
-        </div>
-        <span>{liveDone ? "Concluído" : "Protegido"}</span>
-      </section>
-
-      {pdfArtifacts.length > 0 ? (
-        <section className="operation-panel__section">
-          <h3>Arquivos gerados</h3>
-          <div className="artifact-actions">
-            {pdfArtifacts.map((artifact: Artifact) => (
-              <button
-                className="pill-btn pill-btn--primary"
-                key={`${artifact.label}-${artifact.path}`}
-                onClick={() => void window.confere?.openPath(artifact.path)}
-                type="button"
-              >
-                <FileText aria-hidden="true" size={16} />
-                {artifact.label || "Abrir PDF"}
-              </button>
             ))}
+          </ol>
+        </section>
+      ) : null}
+
+      {stage === "failed" ? (
+        <section className="op-failure">
+          <AlertTriangle aria-hidden="true" size={16} />
+          <div>
+            <strong>A operação não foi concluída</strong>
+            <p>
+              {props.operation?.failedStep ? `Etapa com falha: ${props.operation.failedStep}. ` : ""}
+              Consulte Operações no menu lateral para o histórico completo.
+            </p>
           </div>
         </section>
       ) : null}
 
-      <section className="operation-preview">
-        <h3>Prévia da operação</h3>
-        <div className="operation-preview__body">
-          <ClipboardList aria-hidden="true" size={22} />
-          <div>
-            <strong>{previewTitle}</strong>
-            <p>{suggested === "contaazul" ? "Conta Azul" : suggested === "asaas" ? "Asaas" : "Aguardando módulo"}</p>
-          </div>
-        </div>
-        <dl className="operation-preview__facts">
-          <div>
-            <dt>Cliente</dt>
-            <dd>{dueDateDetails?.customerName ?? props.operation?.customerName ?? "--"}</dd>
-          </div>
-          {isDueDateUpdate || isDownloadBoleto ? (
-            <div>
-              <dt>Cobrança</dt>
-              <dd>
-                {isDownloadBoleto
-                  ? downloadDetails?.chargeId ?? props.operation?.chargeId ?? "--"
-                  : dueDateDetails?.chargeId ?? props.operation?.chargeId ?? "--"}
-              </dd>
-            </div>
-          ) : (
-            <div>
-              <dt>Valor</dt>
-              <dd>{formatMoney(props.operation?.unitValue) ?? "R$ --,--"}</dd>
-            </div>
-          )}
-          {isDownloadBoleto ? (
-            <div>
-              <dt>Valor</dt>
-              <dd>{downloadDetails?.valueBr ?? "R$ --,--"}</dd>
-            </div>
-          ) : null}
-          <div>
-            <dt>{isDueDateUpdate ? "Novo vencimento" : "Vencimento"}</dt>
-            <dd>
-              {isDownloadBoleto
-                ? downloadDetails?.dueDateBr ?? "--/--/----"
-                : formatDate(props.operation?.dueDateIso) ??
-                  dueDateDetails?.dueDateBr ??
-                  "--/--/----"}
-            </dd>
-          </div>
-        </dl>
-      </section>
+      {showTrust ? (
+        <p className="op-trust">
+          <ShieldCheck aria-hidden="true" size={15} />
+          {trustText}
+        </p>
+      ) : null}
+
+      <footer className={`op-footer ${opId ? "" : "op-footer--empty"}`}>
+        <span className="op-footer__label">ID</span>
+        <code>{opId ?? "ainda não gerada"}</code>
+        {opId ? (
+          <button
+            className="op-footer__copy"
+            type="button"
+            aria-label="Copiar ID da operação"
+            onClick={() => void navigator.clipboard?.writeText(opId)}
+          >
+            <Copy aria-hidden="true" size={13} />
+          </button>
+        ) : null}
+      </footer>
     </aside>
   );
 }
@@ -1203,9 +1457,13 @@ function isSilentInteractiveTurn(
 
 export function AssistantScreen(props: {
   onPixelynState?: (state: PixelynState) => void;
+  onGreetingVisible?: (visible: boolean) => void;
 }): ReactElement {
   const [request, setRequest] = useState("");
   const [sessionId, setSessionId] = useState(createSessionId);
+  const [conversationCreatedAt, setConversationCreatedAt] = useState(() => new Date().toISOString());
+  const [conversations, setConversations] = useState<ConversationSummaryView[]>([]);
+  const [conversationsLoading, setConversationsLoading] = useState(true);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [result, setResult] = useState<AgentResultView | undefined>();
   const [draftOperationId, setDraftOperationId] = useState<string | undefined>();
@@ -1215,6 +1473,11 @@ export function AssistantScreen(props: {
   const [phase, setPhase] = useState<PixelynPhase>("idle");
   const [error, setError] = useState<string | undefined>();
   const threadRef = useRef<HTMLDivElement>(null);
+  const skipPersistRef = useRef(false);
+  const isCompact = useMediaQuery("(max-width: 1280px)");
+  const isNarrow = useMediaQuery("(max-width: 1080px)");
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [contextOpen, setContextOpen] = useState(false);
 
   const pixelynState = pixelynStateFromResult(result, phase);
   useEffect(() => {
@@ -1222,13 +1485,76 @@ export function AssistantScreen(props: {
   }, [pixelynState, props.onPixelynState]);
 
   useEffect(() => {
+    props.onGreetingVisible?.(messages.length === 0);
+  }, [messages.length, props.onGreetingVisible]);
+
+  useEffect(() => {
+    if (!isCompact) setHistoryOpen(false);
+  }, [isCompact]);
+
+  useEffect(() => {
+    if (!isNarrow) setContextOpen(false);
+  }, [isNarrow]);
+
+  useEffect(() => {
     const thread = threadRef.current;
     if (!thread) return;
     thread.scrollTo({ top: thread.scrollHeight, behavior: "smooth" });
   }, [messages.length, phase, error]);
 
+  async function refreshConversationList(): Promise<void> {
+    try {
+      const response = await listConversations();
+      setConversations(response.conversations);
+    } catch {
+      setConversations([]);
+    } finally {
+      setConversationsLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void refreshConversationList();
+  }, []);
+
+  async function persistCurrentConversation(nextMessages: ChatMessage[]): Promise<void> {
+    if (nextMessages.length === 0) return;
+    try {
+      const payloadMessages = nextMessages.map((message) =>
+        message.role === "assistant"
+          ? {
+              id: message.id,
+              role: message.role,
+              result: message.result,
+              draftOperationId: message.draftOperationId,
+              timestamp: message.timestamp
+            }
+          : message
+      );
+      const response = await saveConversation({
+        id: sessionId,
+        title: deriveConversationTitle(nextMessages),
+        createdAt: conversationCreatedAt,
+        updatedAt: new Date().toISOString(),
+        messages: payloadMessages
+      });
+      setConversations((current) => {
+        const withoutCurrent = current.filter((entry) => entry.id !== response.conversation.id);
+        return [response.conversation, ...withoutCurrent];
+      });
+    } catch {
+      // Histórico é best-effort; não bloqueia o chat.
+    }
+  }
+
+  useEffect(() => {
+    if (skipPersistRef.current || messages.length === 0 || phase !== "idle") return;
+    void persistCurrentConversation(messages);
+  }, [messages, phase, sessionId, conversationCreatedAt]);
+
   function resetConversation(): void {
     setSessionId(createSessionId());
+    setConversationCreatedAt(new Date().toISOString());
     setMessages([]);
     setRequest("");
     setResult(undefined);
@@ -1238,6 +1564,46 @@ export function AssistantScreen(props: {
     setConfirmOpen(false);
     setError(undefined);
     setPhase("idle");
+  }
+
+  async function loadConversation(id: string): Promise<void> {
+    if (id === sessionId && messages.length > 0) return;
+    try {
+      const response = await getConversation(id);
+      if (response.status !== "ok") return;
+      skipPersistRef.current = true;
+      const loadedMessages = response.conversation.messages as ChatMessage[];
+      const lastAssistant = [...loadedMessages]
+        .reverse()
+        .find((message): message is Extract<ChatMessage, { role: "assistant" }> => message.role === "assistant");
+      setSessionId(response.conversation.id);
+      setConversationCreatedAt(response.conversation.createdAt);
+      setMessages(loadedMessages);
+      setResult(lastAssistant?.result);
+      setDraftOperationId(lastAssistant?.draftOperationId);
+      setOperation(undefined);
+      setConfirmationSheet(undefined);
+      setConfirmOpen(false);
+      setError(undefined);
+      setPhase("idle");
+      setRequest("");
+      setHistoryOpen(false);
+      skipPersistRef.current = false;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Falha ao carregar conversa.");
+    }
+  }
+
+  async function handleDeleteConversation(id: string): Promise<void> {
+    try {
+      await deleteConversation(id);
+      setConversations((current) => current.filter((entry) => entry.id !== id));
+      if (id === sessionId) {
+        resetConversation();
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Falha ao excluir conversa.");
+    }
   }
 
   async function prepare(customText?: string, customParams?: Record<string, unknown>): Promise<void> {
@@ -1422,18 +1788,91 @@ export function AssistantScreen(props: {
     }
   }
 
+  const assistantClassName = [
+    "assistant",
+    isCompact ? "assistant--compact" : "",
+    isNarrow ? "assistant--narrow" : "",
+    historyOpen ? "assistant--history-open" : "",
+    contextOpen ? "assistant--context-open" : ""
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  const historyClassName = [
+    isCompact && !historyOpen ? "conversation-history--hidden" : "",
+    isCompact && historyOpen ? "conversation-history--drawer" : ""
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  const contextClassName = [
+    isNarrow && !contextOpen ? "operation-panel--hidden" : "",
+    isNarrow && contextOpen ? "operation-panel--drawer" : ""
+  ]
+    .filter(Boolean)
+    .join(" ");
+
   return (
-    <section className="assistant">
+    <section className={assistantClassName}>
+      {isCompact && historyOpen ? (
+        <button
+          aria-label="Fechar histórico"
+          className="drawer-backdrop"
+          onClick={() => setHistoryOpen(false)}
+          type="button"
+        />
+      ) : null}
+      {isNarrow && contextOpen ? (
+        <button
+          aria-label="Fechar painel de operação"
+          className="drawer-backdrop"
+          onClick={() => setContextOpen(false)}
+          type="button"
+        />
+      ) : null}
+
+      <ConversationHistoryPanel
+        activeId={sessionId}
+        className={historyClassName}
+        conversations={conversations}
+        loading={conversationsLoading}
+        onCreate={resetConversation}
+        onDelete={(id) => void handleDeleteConversation(id)}
+        onSelect={(id) => void loadConversation(id)}
+      />
+
       <div className="assistant__workspace">
         <header className="assistant__top">
           <div>
             <div className="assistant__title">Conversa</div>
             <p className="assistant__subtitle">Seu assistente de operações financeiras.</p>
           </div>
-          <button className="assistant__reset" onClick={resetConversation} type="button">
-            <RotateCcw aria-hidden="true" size={15} />
-            Nova conversa
-          </button>
+          <div className="assistant__top-actions">
+            {isCompact ? (
+              <button
+                className="assistant__tool"
+                onClick={() => setHistoryOpen((open) => !open)}
+                type="button"
+              >
+                <History aria-hidden="true" size={15} />
+                Histórico
+              </button>
+            ) : null}
+            {isNarrow ? (
+              <button
+                className="assistant__tool"
+                onClick={() => setContextOpen((open) => !open)}
+                type="button"
+              >
+                <PanelRight aria-hidden="true" size={15} />
+                Operação
+              </button>
+            ) : null}
+            <button className="assistant__reset" onClick={resetConversation} type="button">
+              <RotateCcw aria-hidden="true" size={15} />
+              Nova conversa
+            </button>
+          </div>
         </header>
 
         <div className="assistant__thread" ref={threadRef}>
@@ -1481,6 +1920,7 @@ export function AssistantScreen(props: {
             ) : (
               <AssistantResultMessage
                 key={message.id}
+                busy={phase === "preparing" && idx === messages.length - 1}
                 message={message}
                 isLatest={idx === messages.length - 1}
                 onReview={(operationId) => void reviewExecution(operationId)}
@@ -1528,6 +1968,7 @@ export function AssistantScreen(props: {
       </div>
 
       <OperationContextPanel
+        className={contextClassName}
         draftOperationId={draftOperationId}
         operation={operation}
         phase={phase}

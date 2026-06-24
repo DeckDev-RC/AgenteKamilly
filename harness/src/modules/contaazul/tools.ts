@@ -21,7 +21,17 @@ import {
   type ContaAzulMutationClient,
   type ContaAzulReadClient
 } from "./client.js";
+import {
+  mergeCepLookupIntoPrefill,
+  normalizeCnpjCompanyInfo,
+  type CustomerCnpjPrefill
+} from "./cnpj-prefill.js";
 import { parseAccountancyClients, parseFinancialStatementItems } from "./parsers.js";
+
+const optionalEmailField = z.preprocess(
+  (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
+  z.string().email().optional()
+);
 
 export class AmbiguityError extends Error {
   constructor(
@@ -42,6 +52,8 @@ const SEARCH_SALE_CUSTOMERS_TOOL = "contaazul.search_sale_customers";
 const SEARCH_FINANCIAL_CATEGORIES_TOOL = "contaazul.search_financial_categories";
 const SEARCH_SERVICE_ITEMS_TOOL = "contaazul.search_service_items";
 const GET_PERSON_DETAILS_TOOL = "contaazul.get_person_details";
+const LOOKUP_CNPJ_TOOL = "contaazul.lookup_cnpj";
+const LOOKUP_CEP_TOOL = "contaazul.lookup_cep";
 /** Legacy default mirrored from contaazul/interativo.js */
 const CONTAAZUL_LEGACY_FINANCIAL_ACCOUNT_ID = "cf6eedce-10e8-4554-b707-9246826b12c6";
 const UPDATE_DUE_DATE_REISSUE_BOLETO_TOOL = "contaazul.update_due_date_reissue_boleto";
@@ -105,6 +117,15 @@ export const ContaAzulGetPersonDetailsParamsSchema = z.object({
   personUuid: z.string().min(1)
 });
 
+export const ContaAzulLookupCnpjParamsSchema = z.object({
+  relationId: z.string().min(1),
+  cnpj: z.string().min(1)
+});
+
+export const ContaAzulLookupCepParamsSchema = z.object({
+  cep: z.string().min(1)
+});
+
 const ApprovalFieldsSchema = z.object({
   operationId: z.string().optional(),
   approvalText: z.string().optional()
@@ -121,7 +142,8 @@ export const ContaAzulUpdateDueDateReissueBoletoParamsSchema = ApprovalFieldsSch
   installmentVersion: z.number().int().nonnegative(),
   installmentIndex: z.number().int().positive(),
   activeChargeRequests: z.array(z.unknown()).optional(),
-  financialAccountId: z.string().optional()
+  financialAccountId: z.string().optional(),
+  customerName: z.string().optional()
 });
 
 export const ContaAzulUpdateDueDateReissueBoletoWorkflowParamsSchema = ApprovalFieldsSchema.extend({
@@ -130,7 +152,8 @@ export const ContaAzulUpdateDueDateReissueBoletoWorkflowParamsSchema = ApprovalF
   installmentId: z.string().min(1),
   dueDateIso: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   email: z.string().email().optional(),
-  financialAccountId: z.string().optional()
+  financialAccountId: z.string().optional(),
+  customerName: z.string().optional()
 });
 
 const ContaAzulAddressSchema = z
@@ -209,7 +232,7 @@ export const ContaAzulCreateServiceSaleAndIssueBoletoParamsSchema = ApprovalFiel
   notification: z.object({
     email: z.string().email(),
     phone: z.string().optional(),
-    replyTo: z.string().email().optional(),
+    replyTo: optionalEmailField,
     companyDisplayName: z.string().optional()
   })
 });
@@ -231,7 +254,7 @@ export const ContaAzulCreateServiceSaleBoletoWorkflowParamsSchema = ApprovalFiel
   notification: z.object({
     email: z.string().email(),
     phone: z.string().optional(),
-    replyTo: z.string().email().optional(),
+    replyTo: optionalEmailField,
     companyDisplayName: z.string().optional()
   })
 }).superRefine((value, context) => {
@@ -306,6 +329,12 @@ export type ContaAzulReadTools = {
   getPersonDetails(
     params: z.infer<typeof ContaAzulGetPersonDetailsParamsSchema>
   ): Promise<ToolReceipt<Record<string, unknown>>>;
+  lookupCnpj(
+    params: z.infer<typeof ContaAzulLookupCnpjParamsSchema>
+  ): Promise<ToolReceipt<CustomerCnpjPrefill>>;
+  lookupCep(
+    params: z.infer<typeof ContaAzulLookupCepParamsSchema>
+  ): Promise<ToolReceipt<CustomerCnpjPrefill>>;
 };
 
 export type ContaAzulPlannedMappedRequest = {
@@ -717,6 +746,124 @@ export function createContaAzulReadTools(
           error
         });
       }
+    },
+
+    async lookupCnpj(rawParams) {
+      const params = ContaAzulLookupCnpjParamsSchema.parse(rawParams);
+      const operationId = createOperationId(LOOKUP_CNPJ_TOOL);
+      const authToken = proSessions.get(params.relationId);
+
+      if (!authToken) {
+        const warning =
+          "Conta Azul Pro session is not available. Run switchToProSession for this relation first.";
+        return writeReceipt({
+          ledgerPath: options.ledgerPath,
+          operationId,
+          runtimeMode,
+          toolName: LOOKUP_CNPJ_TOOL,
+          status: "blocked",
+          summary: warning,
+          args: params,
+          data: {},
+          warnings: [warning],
+          responseSummary: { blocked: true, reason: warning }
+        });
+      }
+
+      try {
+        const raw = asRecord(
+          await options.client.lookupCnpj({
+            authToken,
+            cnpj: params.cnpj
+          })
+        );
+        if (!raw) {
+          return writeReceipt({
+            ledgerPath: options.ledgerPath,
+            operationId,
+            runtimeMode,
+            toolName: LOOKUP_CNPJ_TOOL,
+            status: "failed",
+            summary: "Nenhum dado retornado para este CNPJ.",
+            args: params,
+            data: {}
+          });
+        }
+        const data = normalizeCnpjCompanyInfo(raw);
+        return writeReceipt({
+          ledgerPath: options.ledgerPath,
+          operationId,
+          runtimeMode,
+          toolName: LOOKUP_CNPJ_TOOL,
+          status: "succeeded",
+          summary: data.name
+            ? `Dados encontrados para ${data.name}.`
+            : "Dados do CNPJ recuperados com sucesso.",
+          args: params,
+          data,
+          redactData: false,
+          responseSummary: {
+            name: data.name,
+            companyName: data.companyName,
+            zipcode: data.zipcode
+          }
+        });
+      } catch (error) {
+        return writeErrorReceipt({
+          ledgerPath: options.ledgerPath,
+          operationId,
+          runtimeMode,
+          toolName: LOOKUP_CNPJ_TOOL,
+          args: params,
+          error
+        });
+      }
+    },
+
+    async lookupCep(rawParams) {
+      const params = ContaAzulLookupCepParamsSchema.parse(rawParams);
+      const operationId = createOperationId(LOOKUP_CEP_TOOL);
+
+      try {
+        const raw = asRecord(await options.client.lookupCep({ cep: params.cep }));
+        if (!raw) {
+          return writeReceipt({
+            ledgerPath: options.ledgerPath,
+            operationId,
+            runtimeMode,
+            toolName: LOOKUP_CEP_TOOL,
+            status: "failed",
+            summary: "Nenhum dado retornado para este CEP.",
+            args: params,
+            data: {}
+          });
+        }
+        const data = mergeCepLookupIntoPrefill({}, raw);
+        return writeReceipt({
+          ledgerPath: options.ledgerPath,
+          operationId,
+          runtimeMode,
+          toolName: LOOKUP_CEP_TOOL,
+          status: "succeeded",
+          summary: "Endereço do CEP recuperado com sucesso.",
+          args: params,
+          data,
+          redactData: false,
+          responseSummary: {
+            idCity: data.idCity,
+            cityName: data.cityName
+          }
+        });
+      } catch (error) {
+        return writeErrorReceipt({
+          ledgerPath: options.ledgerPath,
+          operationId,
+          runtimeMode,
+          toolName: LOOKUP_CEP_TOOL,
+          args: params,
+          error
+        });
+      }
     }
   };
 }
@@ -811,6 +958,8 @@ export function createContaAzulMutationTools(
           installmentIndex,
           activeChargeRequests,
           financialAccountId,
+          customerName:
+            stringValue(params.customerName) ?? stringValue(detalhes.negotiator?.name) ?? undefined,
           approvalText: params.approvalText
         });
 
@@ -894,9 +1043,14 @@ export function createContaAzulMutationTools(
           toolName: UPDATE_DUE_DATE_REISSUE_BOLETO_TOOL,
           status: "planned",
           summary:
-            "Reemissao de boleto Conta Azul planejada; nenhum POST/PATCH enviado.",
+            "Reemissao de boleto Conta Azul planejada; apos aprovar, o PDF atualizado sera baixado.",
           args: params,
-          data
+          data,
+          responseSummary: dueDateReissueResponseSummary({
+            params,
+            summary:
+              "Reemissao de boleto Conta Azul planejada; apos aprovar, o PDF atualizado sera baixado."
+          })
         });
       }
 
@@ -929,10 +1083,85 @@ export function createContaAzulMutationTools(
         isCaPaymentType: true,
         version: params.installmentVersion
       });
+      const updatedInstallmentVersion = installmentVersionFromUpdateResult(
+        updateResult,
+        params.installmentVersion
+      );
+      const liveChargePayload = buildChargeRequestPayload({
+        financialAccountId: financialAccountId!,
+        installmentId: params.installmentId,
+        installmentVersion: updatedInstallmentVersion,
+        originalDescription: params.originalDescription,
+        dueDateIso: params.dueDateIso,
+        value: params.value,
+        index: params.installmentIndex,
+        email: params.email,
+        smsNumbers: [],
+        whatsappNumbers: []
+      });
       const chargeResult = await options.client.createChargeRequest({
         authToken,
-        payload: chargePayload
+        payload: liveChargePayload
       });
+      const chargeRequestId = extractChargeRequestId(chargeResult);
+
+      const warnings: string[] = [];
+      const artifacts: Artifact[] = [];
+      let chargeUrl: string | undefined;
+      let failedStep: string | undefined;
+
+      try {
+        failedStep = "poll_charge_url";
+        const confirmedCharge = await pollChargeRequestFromFinancialEventSummary({
+          client: options.client,
+          authToken,
+          financialEventId: params.financialEventId,
+          chargeRequestId,
+          maxAttempts: 10,
+          delayMs: 2000
+        });
+        chargeUrl = confirmedCharge.chargeUrl;
+
+        failedStep = "download_pdf";
+        const customerName = params.customerName?.trim() || params.originalDescription;
+        const pdf = await options.client.downloadBoletoPdf({
+          authToken,
+          customerName,
+          chargeRequestId: confirmedCharge.chargeRequestId,
+          chargeUrl: confirmedCharge.chargeUrl
+        });
+        const pdfArtifact = await saveBinaryArtifact({
+          artifactsDir: options.artifactsDir,
+          provider: "contaazul",
+          operationId,
+          label: "boleto reemitido",
+          fileName: `boleto_vencimento_${params.installmentId}.pdf`,
+          kind: "pdf",
+          contents: pdf
+        });
+        artifacts.push(pdfArtifact);
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : "falha ao obter PDF do boleto.";
+        warnings.push(
+          failedStep === "download_pdf"
+            ? `Vencimento atualizado e boleto reemitido, mas o PDF nao foi baixado: ${detail}`
+            : `Vencimento atualizado e boleto reemitido, mas a URL da cobranca ainda nao ficou disponivel: ${detail}`
+        );
+      }
+
+      const resultSummary = {
+        cancelResult,
+        updateResult,
+        chargeResult,
+        chargeRequestId,
+        chargeUrl,
+        financialEventId: params.financialEventId,
+        installmentId: params.installmentId
+      };
+      const summary =
+        artifacts.length > 0
+          ? "Vencimento atualizado, boleto reemitido e PDF baixado no Conta Azul."
+          : "Vencimento atualizado e boleto reemitido no Conta Azul.";
 
       return writeMutationReceipt({
         ledgerPath: options.ledgerPath,
@@ -940,12 +1169,20 @@ export function createContaAzulMutationTools(
         runtimeMode,
         toolName: UPDATE_DUE_DATE_REISSUE_BOLETO_TOOL,
         status: "succeeded",
-        summary: "Vencimento atualizado e boleto reemitido no Conta Azul.",
+        summary,
         args: params,
         data: {
           ...data,
-          result: { cancelResult, updateResult, chargeResult }
-        }
+          result: resultSummary
+        },
+        artifacts,
+        warnings,
+        responseSummary: dueDateReissueResponseSummary({
+          params,
+          summary,
+          chargeRequestId,
+          chargeUrl
+        })
       });
     },
 
@@ -1119,6 +1356,9 @@ export function createContaAzulMutationTools(
               resolved: {
                 customerId: match.id,
                 customerName: match.name,
+                tenantId: params.tenantId,
+                relationId: accountancyClient.relationId,
+                tenantName: accountancyClient.name,
                 alreadyExists: true
               }
             },
@@ -1273,6 +1513,9 @@ export function createContaAzulMutationTools(
                 resolved: {
                   customerId: (receipt.data.result as any)?.uuid ?? (receipt.data.result as any)?.id,
                   customerName: person.name,
+                  tenantId: params.tenantId,
+                  relationId: accountancyClient.relationId,
+                  tenantName: accountancyClient.name,
                   createBoleto: params.createBoleto
                 }
               }
@@ -2671,6 +2914,14 @@ function buildReissuePlannedRequests(input: {
   return plannedRequests;
 }
 
+function installmentVersionFromUpdateResult(updateResult: unknown, previousVersion: number): number {
+  const version = asRecord(updateResult)?.version;
+  if (typeof version === "number" && Number.isFinite(version)) {
+    return version;
+  }
+  return previousVersion + 1;
+}
+
 function buildChargeRequestPayload(input: {
   financialAccountId: string;
   installmentId: string;
@@ -2845,6 +3096,84 @@ async function pollFinancialEventForSale(input: {
   }
 
   throw new Error(`Conta Azul financial event not found for sale ${input.saleId}.`);
+}
+
+async function pollChargeRequestFromFinancialEventSummary(input: {
+  client: ContaAzulMutationClient;
+  authToken: string;
+  financialEventId: string;
+  chargeRequestId: string;
+  maxAttempts: number;
+  delayMs: number;
+}): Promise<{ chargeRequestId: string; chargeUrl: string }> {
+  for (let attempt = 1; attempt <= input.maxAttempts; attempt++) {
+    const summary = await input.client.getFinancialEventSummary({
+      authToken: input.authToken,
+      financialEventId: input.financialEventId
+    });
+    const chargeRequest = extractChargeRequestFromEventSummary(summary, input.chargeRequestId);
+    if (chargeRequest) return chargeRequest;
+
+    if (attempt < input.maxAttempts) {
+      await sleep(input.delayMs);
+    }
+  }
+
+  throw new Error(
+    "Conta Azul charge request URL not found in financial event summary after boleto reissue."
+  );
+}
+
+function extractChargeRequestFromEventSummary(
+  summary: unknown,
+  chargeRequestId: string
+): { chargeRequestId: string; chargeUrl: string } | undefined {
+  const paymentCondition = asRecord(asRecord(summary)?.paymentCondition);
+  const installments = asArray(paymentCondition?.installments);
+
+  for (const installment of installments) {
+    const chargeRequests = asArray(asRecord(installment)?.chargeRequests);
+    for (const request of chargeRequests) {
+      const record = asRecord(request);
+      const id = stringValue(record?.id);
+      const url = stringValue(record?.url);
+      if (id === chargeRequestId && url) {
+        return { chargeRequestId: id, chargeUrl: url };
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function dueDateReissueResponseSummary(input: {
+  params: {
+    customerName?: string;
+    dueDateIso: string;
+    installmentId: string;
+    originalDescription?: string;
+  };
+  summary: string;
+  chargeRequestId?: string;
+  chargeUrl?: string;
+}): Record<string, string> {
+  const output: Record<string, string> = {
+    summary: input.summary,
+    installmentId: input.params.installmentId,
+    chargeId: input.chargeRequestId ?? input.params.installmentId,
+    dueDateIso: input.params.dueDateIso,
+    dueDateBr: formatIsoDateBr(input.params.dueDateIso)
+  };
+  if (input.params.customerName) output.customerName = input.params.customerName;
+  if (input.params.originalDescription) output.chargeLabel = input.params.originalDescription;
+  if (input.chargeRequestId) output.chargeRequestId = input.chargeRequestId;
+  if (input.chargeUrl) output.chargeUrl = input.chargeUrl;
+  return output;
+}
+
+function formatIsoDateBr(iso: string): string {
+  const parts = iso.split("-");
+  return parts.length === 3 ? `${parts[2]}/${parts[1]}/${parts[0]}` : iso;
 }
 
 async function pollChargeRequestFromFinancialStatement(input: {

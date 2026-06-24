@@ -44,4 +44,33 @@ describe("Conta Azul parsers", () => {
       }
     ]);
   });
+
+  it("reads customer name from negotiator when customer is absent", () => {
+    expect(
+      parseFinancialStatementItems([
+        {
+          id: "inst_002",
+          financialEventId: "event_002",
+          description: "Venda 925",
+          value: 10,
+          date: "2026-06-30",
+          negotiator: { name: "TVS - EMISSORA DO SISTEMA BRASILEIRO DE TELEVISAO" },
+          categoryName: "HONORÁRIO - COBRANÇA",
+          status: "OPEN"
+        }
+      ])
+    ).toEqual([
+      {
+        id: "inst_002",
+        financialEventId: "event_002",
+        description: "Venda 925",
+        value: 10,
+        dueDateIso: "2026-06-30",
+        customerName: "TVS - EMISSORA DO SISTEMA BRASILEIRO DE TELEVISAO",
+        categoryName: "HONORÁRIO - COBRANÇA",
+        status: "OPEN",
+        installmentId: "inst_002"
+      }
+    ]);
+  });
 });
