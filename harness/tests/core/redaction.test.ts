@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { redact, redactHeaders, redactString } from "../../src/core/redaction.js";
+import { redact, redactHeaders, redactString, sanitizeFormDefaultValues } from "../../src/core/redaction.js";
 
 describe("redaction", () => {
   it("redacts sensitive headers while keeping harmless headers", () => {
@@ -85,5 +85,15 @@ describe("redaction", () => {
     const text = redactString("Ligar para (62) 99151-4384 hoje");
     expect(text).not.toContain("99151-4384");
     expect(text).toContain("[REDACTED_PHONE]");
+  });
+
+  it("drops redacted placeholders from form defaults", () => {
+    expect(
+      sanitizeFormDefaultValues({
+        email: "[REDACTED_EMAIL]",
+        name: "Cliente Exemplo",
+        billingPhone: "[REDACTED_PHONE]"
+      })
+    ).toEqual({ name: "Cliente Exemplo" });
   });
 });

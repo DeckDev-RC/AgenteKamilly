@@ -91,6 +91,7 @@ export type FinancialStatementItem = {
   value: number;
   dueDateIso?: string;
   customerName?: string;
+  categoryName?: string;
   status?: string;
   installmentId?: string;
 };

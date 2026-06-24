@@ -134,6 +134,44 @@ function fakeService(): ConfereService {
     },
     async searchServiceItems() {
       return [];
+    },
+    async getAppSettings() {
+      return {
+        envPath: ".env",
+        allowLiveMutations: false,
+        geminiApiKeyConfigured: false
+      };
+    },
+    async updateAppSettings() {
+      return {
+        status: "ok",
+        settings: {
+          envPath: ".env",
+          allowLiveMutations: false,
+          geminiApiKeyConfigured: false
+        }
+      };
+    },
+    async listConversations() {
+      return { status: "ok", conversations: [] };
+    },
+    async getConversation() {
+      return { status: "not_found" };
+    },
+    async saveConversation(input) {
+      return {
+        status: "ok",
+        conversation: {
+          id: input.id,
+          title: input.title,
+          updatedAt: input.updatedAt,
+          preview: "",
+          messageCount: input.messages.length
+        }
+      };
+    },
+    async deleteConversation() {
+      return { status: "not_found" };
     }
   };
 }

@@ -1,7 +1,9 @@
 {
   "name": "confere-harness",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
+  "description": "Confere — assistente de operações financeiras (Asaas e Conta Azul).",
+  "author": "Confere",
   "type": "module",
   "main": "out/main/main.js",
   "scripts": {
@@ -12,12 +14,16 @@
     "contaazul:controlled-sale": "tsx scripts/contaazul-controlled-sale-test.ts",
     "test": "vitest run",
     "test:ui": "vitest run --config vitest.ui.config.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "dist": "electron-vite build && electron-builder --win nsis --config.directories.output=C:/eb-out",
+    "dist:dir": "electron-vite build && electron-builder --win dir --config.directories.output=C:/eb-out",
+    "dist:eb": "npm run typecheck && npm run dist"
   },
   "dependencies": {
     "@fontsource/poppins": "^5.2.7",
     "dotenv": "^17.4.2",
     "lucide-react": "^1.21.0",
+    "playwright-core": "^1.61.1",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "zod": "^4.4.3"
@@ -28,11 +34,80 @@
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.2.0",
     "electron": "^42.4.1",
+    "electron-builder": "^26.15.3",
     "electron-vite": "^5.0.0",
     "jsdom": "^29.1.1",
     "tsx": "^4.22.4",
     "typescript": "^5.9.3",
     "vite": "^7.3.5",
     "vitest": "^4.1.9"
+  },
+  "build": {
+    "appId": "br.com.confere.desktop",
+    "productName": "Confere",
+    "copyright": "Copyright © Confere",
+    "directories": {
+      "output": "release",
+      "buildResources": "resources"
+    },
+    "artifactName": "${productName}-Setup-${version}.${ext}",
+    "files": [
+      "out/**/*",
+      "package.json",
+      "!**/node_modules/lucide-react/**",
+      "!**/node_modules/@fontsource/**",
+      "!**/node_modules/react/**",
+      "!**/node_modules/react-dom/**",
+      "!**/node_modules/scheduler/**"
+    ],
+    "asarUnpack": [
+      "**/node_modules/playwright-core/**"
+    ],
+    "extraResources": [
+      {
+        "from": "src/ui/assets/logo/logo.png",
+        "to": "logo.png"
+      },
+      {
+        "from": "../renew-session.cjs",
+        "to": "renew-session.cjs"
+      },
+      {
+        "from": "resources/default.env",
+        "to": "default.env"
+      }
+    ],
+    "extraFiles": [
+      {
+        "from": "resources/LEIA-ME.txt",
+        "to": "LEIA-ME.txt"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "src/ui/assets/logo/logo.png",
+      "requestedExecutionLevel": "asInvoker"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "allowElevation": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Confere",
+      "deleteAppDataOnUninstall": false,
+      "installerLanguages": [
+        "pt_BR"
+      ],
+      "language": "1046"
+    }
   }
 }

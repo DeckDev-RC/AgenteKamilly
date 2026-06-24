@@ -171,6 +171,8 @@ export type ContaAzulReadClient = {
   searchServiceItems(params: SearchServiceItemsParams): Promise<unknown[]>;
   listServiceItems(params: ListServiceItemsParams): Promise<unknown[]>;
   getPersonDetails(params: GetPersonDetailsParams): Promise<unknown>;
+  lookupCnpj(params: LookupCnpjParams): Promise<unknown>;
+  lookupCep(params: LookupCepParams): Promise<unknown>;
 };
 
 export type ContaAzulMutationClient = ContaAzulReadClient & {

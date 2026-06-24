@@ -59,18 +59,27 @@ export function parseFinancialStatementItems(input: unknown): FinancialStatement
         stringValue(item.expectedPaymentDate);
       if (dueDateIso) parsed.dueDateIso = dueDateIso;
 
-      const customerName =
-        stringValue(item.customerName) ??
-        stringValue(objectOrUndefined(item.customer)?.name) ??
-        stringValue(objectOrUndefined(item.person)?.name);
+      const customerName = extractFinancialStatementCustomerName(item);
       if (customerName) parsed.customerName = customerName;
 
       const status = stringValue(item.status);
       if (status) parsed.status = status;
 
+      const categoryName = stringValue(item.categoryName);
+      if (categoryName) parsed.categoryName = categoryName;
+
       return parsed;
     })
     .filter((item): item is FinancialStatementItem => Boolean(item));
+}
+
+export function extractFinancialStatementCustomerName(item: Record<string, unknown>): string | undefined {
+  return (
+    stringValue(item.customerName) ??
+    stringValue(objectOrUndefined(item.customer)?.name) ??
+    stringValue(objectOrUndefined(item.negotiator)?.name) ??
+    stringValue(objectOrUndefined(item.person)?.name)
+  );
 }
 
 function arrayFromUnknownObject(input: unknown, key: string): unknown[] {

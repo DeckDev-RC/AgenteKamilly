@@ -1,16 +1,24 @@
 import type {
   AgentTurnApiRequest,
   AgentTurnApiResponse,
+  AppSettingsView,
   CheckConnectionsApiResponse,
   ConfirmationSheetApiResponse,
   ConfereStatus,
   ConnectionHealth,
+  ConversationDeleteApiResponse,
+  ConversationGetApiResponse,
+  ConversationListApiResponse,
+  ConversationSaveApiRequest,
+  ConversationSaveApiResponse,
   ExecuteOperationApiResponse,
   OperationListApiResponse,
   OperationSummaryApiResponse,
   RenewEvent,
   RenewProvider,
-  RenewStartApiResponse
+  RenewStartApiResponse,
+  UpdateAppSettingsRequest,
+  UpdateAppSettingsResponse
 } from "../server/api-types.js";
 
 let cachedBaseUrl: string | undefined;
@@ -106,6 +114,48 @@ export async function getConfirmationSheet(
     };
   }
   return window.confere.getConfirmationSheet(operationId);
+}
+
+export async function getAppSettings(): Promise<AppSettingsView> {
+  if (window.confere) return window.confere.getAppSettings();
+  return {
+    envPath: ".env",
+    allowLiveMutations: false,
+    geminiApiKeyConfigured: false
+  };
+}
+
+export async function updateAppSettings(
+  input: UpdateAppSettingsRequest
+): Promise<UpdateAppSettingsResponse> {
+  if (!window.confere) {
+    throw new Error("Configurações disponíveis apenas no app desktop.");
+  }
+  return window.confere.updateAppSettings(input);
+}
+
+export async function listConversations(): Promise<ConversationListApiResponse> {
+  if (window.confere) return window.confere.listConversations();
+  return { status: "ok", conversations: [] };
+}
+
+export async function getConversation(id: string): Promise<ConversationGetApiResponse> {
+  if (window.confere) return window.confere.getConversation(id);
+  return { status: "not_found" };
+}
+
+export async function saveConversation(
+  input: ConversationSaveApiRequest
+): Promise<ConversationSaveApiResponse> {
+  if (!window.confere) {
+    throw new Error("Histórico disponível apenas no app desktop.");
+  }
+  return window.confere.saveConversation(input);
+}
+
+export async function deleteConversation(id: string): Promise<ConversationDeleteApiResponse> {
+  if (!window.confere) return { status: "not_found" };
+  return window.confere.deleteConversation(id);
 }
 
 async function getJson<T>(path: string): Promise<T> {

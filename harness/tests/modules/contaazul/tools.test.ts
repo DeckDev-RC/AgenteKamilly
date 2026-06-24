@@ -200,6 +200,30 @@ describe("Conta Azul read tools", () => {
     expect(receipt.data).toEqual([{ id: "cust_1", name: "AZUOS ASSESSORIA CONTÁBIL LTDA" }]);
   });
 
+  it("returns CNPJ prefill with real email for interactive forms", async () => {
+    const ledgerPath = await tempLedgerPath();
+    const client = createFakeClient({ proToken: "pro-token-test" });
+    const tools = createContaAzulReadTools({
+      client,
+      ledgerPath,
+      operationIdFactory: () => "op_lookup_cnpj"
+    });
+
+    await tools.switchToProSession({ relationId: "rel_001" });
+    const receipt = await tools.lookupCnpj({
+      relationId: "rel_001",
+      cnpj: "05.570.714/0001-59"
+    });
+
+    expect(receipt.status).toBe("succeeded");
+    expect(receipt.data).toMatchObject({
+      name: "Empresa Exemplo",
+      email: "contato@empresa.test",
+      billingEmail: "contato@empresa.test"
+    });
+    expect(receipt.data?.email).not.toBe("[REDACTED_EMAIL]");
+  });
+
   it("blocks Conta Azul lookup tools when Pro session was not switched", async () => {
     const ledgerPath = await tempLedgerPath();
     const client = createFakeClient({});
@@ -283,6 +307,7 @@ describe("Conta Azul mutation tools", () => {
     });
 
     expect(receipt.status).toBe("planned");
+    expect(receipt.summary).toContain("PDF atualizado sera baixado");
     expect(receipt.data?.approvalPreview).toMatchObject({
       operationId: "op_reissue",
       provider: "contaazul",
@@ -396,6 +421,7 @@ describe("Conta Azul mutation tools", () => {
       installmentVersion: 3,
       installmentIndex: 1,
       activeChargeRequests: [{ id: "charge_old", status: "ACTIVE" }],
+      customerName: "Cliente Exemplo",
       approvalText: "APROVAR op_reissue"
     });
 
@@ -403,8 +429,23 @@ describe("Conta Azul mutation tools", () => {
     expect(client.calls.map((call: any) => call.name)).toEqual([
       "cancelChargeRequests",
       "updateInstallmentDueDate",
-      "createChargeRequest"
+      "createChargeRequest",
+      "getFinancialEventSummary",
+      "downloadBoletoPdf"
     ]);
+    const createCall = client.calls.find((call: any) => call.name === "createChargeRequest");
+    expect(createCall?.payload).toMatchObject({
+      payload: {
+        installmentGroups: [
+          {
+            installmentIds: [{ id: "inst_001", version: 4 }]
+          }
+        ]
+      }
+    });
+    expect(receipt.artifacts).toHaveLength(1);
+    expect(receipt.artifacts[0]?.kind).toBe("pdf");
+    expect(receipt.summary).toContain("PDF baixado");
   });
 
   it("plans customer creation as a structured payload in dry-run", async () => {
@@ -1339,6 +1380,20 @@ function createFakeClient(options: {
           phoneNumber: "11999999999"
         }
       };
+    },
+    async lookupCnpj(params: unknown) {
+      client.lookupCalls.push({ name: "lookupCnpj", payload: params });
+      return {
+        companyName: "Empresa Exemplo LTDA",
+        tradingName: "Empresa Exemplo",
+        email: "contato@empresa.test",
+        phoneNumber: "6233334444",
+        zipCode: "01001000"
+      };
+    },
+    async lookupCep(params: unknown) {
+      client.lookupCalls.push({ name: "lookupCep", payload: params });
+      return { idCidade: 1234, nmBairro: "CENTRO", nmEndereco: "RUA TESTE" };
     }
   };
 

@@ -1,0 +1,37 @@
+Confere — instalador autônomo
+===========================
+
+Este pacote instala o Confere em qualquer Windows 10/11 (64 bits) sem Node.js,
+sem repositório de código e sem configurar PATH manualmente.
+
+Instalação
+----------
+1. Execute o arquivo "Confere Setup X.Y.Z.exe" nesta pasta.
+2. Siga o assistente (pode escolher a pasta de instalação).
+3. Abra o Confere pelo atalho na área de trabalho ou no menu Iniciar.
+
+Primeira execução
+-----------------
+- O app cria automaticamente a pasta de dados do usuário em:
+  %APPDATA%\Confere
+- Um arquivo .env inicial é gerado lá (modo dry-run por padrão).
+- Configure GEMINI_API_KEY e ALLOW_LIVE_MUTATIONS em:
+  Configurações (dentro do app) ou editando %APPDATA%\Confere\.env
+
+Conectar Asaas e Conta Azul
+---------------------------
+1. Vá em Sessões no app.
+2. Clique em Renovar credenciais para cada provedor.
+3. Faça login no navegador que abrir (Edge ou Chrome instalado na máquina).
+4. Volte ao app e confirme quando solicitado.
+
+Requisitos
+----------
+- Windows 10 ou 11 (64 bits)
+- Microsoft Edge ou Google Chrome (para captura de sessão)
+- Conexão com a internet
+
+Suporte
+-------
+Os dados (histórico, conversas, credenciais) ficam em %APPDATA%\Confere
+e não são removidos ao desinstalar o aplicativo.

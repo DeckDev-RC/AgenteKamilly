@@ -521,6 +521,62 @@ describe("interactive flow controller", () => {
     ]);
   });
 
+  it("accepts an empty optional reply-to email when preparing the sale workflow", async () => {
+    const store = createInteractiveFlowStore();
+    const registry = createToolRegistry();
+    const calls: unknown[] = [];
+    registerTenantTools(registry);
+    registerSearchTools(registry);
+    registry.register({
+      name: "contaazul.create_service_sale_boleto_workflow",
+      description: "Workflow",
+      parameters: z.object({}).passthrough(),
+      execute: async (params) => {
+        calls.push(params);
+        return {
+          ...receipt("contaazul.create_service_sale_boleto_workflow", {
+            approvalPreview: { operationId: "op_interactive_plan" }
+          }),
+          status: "planned"
+        } satisfies ToolReceipt;
+      }
+    });
+
+    await reachSaleForm(store, registry);
+
+    const planned = await runInteractiveFlowTurn({
+      request: "Preparar boleto",
+      registry,
+      sessionId: "sess_contaazul",
+      store,
+      params: {
+        __interactive: { flow: "contaazul_service_sale_boleto", action: "submit_sale_details" },
+        categoryId: "cat_1",
+        itemId: "item_1",
+        serviceDescription: "Honorário mensal",
+        unitValueBr: "10,00",
+        dueDateBr: "30/06/2026",
+        "notification.phone": "62991514384",
+        "notification.email": "kamilly.agregarnegocios@gmail.com",
+        "notification.replyTo": ""
+      }
+    });
+
+    expect(planned.handled).toBe(true);
+    if (!planned.handled) throw new Error("expected handled result");
+    expect(planned.draftOperationId).toBe("op_interactive_plan");
+    expect(calls).toEqual([
+      expect.objectContaining({
+        notification: {
+          phone: "62991514384",
+          email: "kamilly.agregarnegocios@gmail.com"
+        }
+      })
+    ]);
+    const notification = (calls[0] as { notification: Record<string, unknown> }).notification;
+    expect(notification).not.toHaveProperty("replyTo");
+  });
+
   it("keeps the sale form open when the due date is invalid", async () => {
     const store = createInteractiveFlowStore();
     const registry = createToolRegistry();
@@ -782,7 +838,7 @@ describe("interactive flow controller", () => {
     if (!start.handled) throw new Error("expected handled result");
     expect(start.result).toMatchObject({
       formId: "asaas_download_boleto",
-      missingFields: ["customerId", "chargeId"]
+      missingFields: ["customerId", "chargeIds"]
     });
 
     const withCharges = await runInteractiveFlowTurn({
@@ -838,39 +894,187 @@ describe("interactive flow controller", () => {
     });
 
     await runInteractiveFlowTurn({ request: "começar", registry, sessionId: "sess_cc", store, params: { __interactive: { flow: "anchor", action: "start_contaazul_create_customer" } } });
-    await runInteractiveFlowTurn({ request: "MAIS NEGOCIOS", registry, sessionId: "sess_cc", store, params: { __interactive: { flow: "contaazul_create_customer", action: "select_tenant" }, tenantId: 3047702, relationId: "rel_mais", tenantName: "MAIS NEGOCIOS" } });
+    const formPrompt = await runInteractiveFlowTurn({ request: "MAIS NEGOCIOS", registry, sessionId: "sess_cc", store, params: { __interactive: { flow: "contaazul_create_customer", action: "select_tenant" }, tenantId: 3047702, relationId: "rel_mais", tenantName: "MAIS NEGOCIOS" } });
+    expect(formPrompt.handled).toBe(true);
+    if (!formPrompt.handled) throw new Error("expected handled result");
+    expect(formPrompt.result).toMatchObject({
+      formId: "contaazul_create_customer_details",
+      missingFields: expect.arrayContaining(["personType", "document", "name"])
+    });
 
-    const docPrompt = await runInteractiveFlowTurn({ request: "Física", registry, sessionId: "sess_cc", store, params: { __interactive: { flow: "contaazul_create_customer", action: "select_person_type" }, personType: "Física" } });
-    expect(docPrompt.handled).toBe(true);
-    if (!docPrompt.handled) throw new Error("expected handled result");
-    expect(docPrompt.result).toMatchObject({ missingFields: ["document"] });
-
-    // CUSTOMER_FIELDS order for Física (companyName excluded):
-    // document, name, email, cellPhone, commercialPhone, zipcode, street,
-    // numberAddress, neighborhood, complement, billingEmail, billingPhone
-    const seq = ["123.456.789-00", "MARIA SILVA", "maria@example.com", "62999990000", "pular", "74000000", "Rua A", "100", "Centro", "pular", "maria@example.com", "62999990000"];
-    let last;
-    for (const value of seq) {
-      last = await runInteractiveFlowTurn({ request: value, registry, sessionId: "sess_cc", store });
-    }
-    expect(last!.handled).toBe(true);
-    if (!last!.handled) throw new Error("expected handled result");
-    expect(last!.draftOperationId).toBe("op_cust");
-    expect(calls[0]).toMatchObject({ tenantId: 3047702, personType: "Física", document: "123.456.789-00", name: "MARIA SILVA", billingEmail: "maria@example.com", billingPhone: "62999990000" });
+    const planned = await runInteractiveFlowTurn({
+      request: "Preparar cadastro · MARIA SILVA",
+      registry,
+      sessionId: "sess_cc",
+      store,
+      params: {
+        __interactive: { flow: "contaazul_create_customer", action: "submit_create_customer_details" },
+        personType: "Física",
+        document: "123.456.789-00",
+        name: "MARIA SILVA",
+        email: "maria@example.com",
+        cellPhone: "62999990000",
+        billingEmail: "maria@example.com",
+        billingPhone: "62999990000"
+      }
+    });
+    expect(planned.handled).toBe(true);
+    if (!planned.handled) throw new Error("expected handled result");
+    expect(planned.draftOperationId).toBe("op_cust");
+    expect(calls[0]).toMatchObject({
+      tenantId: 3047702,
+      relationId: "rel_mais",
+      tenantName: "MAIS NEGOCIOS",
+      personType: "Física",
+      document: "123.456.789-00",
+      name: "MARIA SILVA",
+      billingEmail: "maria@example.com",
+      billingPhone: "62999990000"
+    });
   });
+
+  it("opens the boleto form after customer registration when handoff lacks relationId", async () => {
+    const store = createInteractiveFlowStore();
+    const registry = createToolRegistry();
+    registerTenantTools(registry);
+    registerSearchTools(registry);
+
+    const result = await runInteractiveFlowTurn({
+      request: "Emitir boleto de serviço",
+      registry,
+      sessionId: "sess_handoff",
+      store,
+      params: {
+        __interactive: { flow: "contaazul_service_sale_boleto", action: "start_with_customer" },
+        tenantId: 3047702,
+        customerId: "new_cust",
+        customerName: "TELEVISAO ANHANGUERA S/A"
+      }
+    });
+
+    expect(result.handled).toBe(true);
+    if (!result.handled) throw new Error("expected handled result");
+    expect(result.result).toMatchObject({
+      formId: "contaazul_service_sale_details",
+      missingFields: expect.arrayContaining(["categoryId", "itemId"])
+    });
+  });
+
+  it("prefills PJ customer form fields from CNPJ lookup on blur", async () => {
+    const store = createInteractiveFlowStore();
+    const registry = createToolRegistry();
+    registerTenantTools(registry);
+    registry.register({
+      name: "contaazul.lookup_cnpj",
+      description: "Lookup CNPJ",
+      parameters: z.object({ relationId: z.string(), cnpj: z.string() }),
+      execute: async () =>
+        receipt("contaazul.lookup_cnpj", {
+          name: "AZUOS ASSESSORIA",
+          companyName: "AZUOS ASSESSORIA CONTABIL LTDA",
+          email: "contato@azuos.com.br",
+          cellPhone: "6233334444",
+          billingEmail: "contato@azuos.com.br",
+          zipcode: "74000-000",
+          numberAddress: "100",
+          street: "RUA 10",
+          neighborhood: "CENTRO",
+          state: "GO"
+        })
+    });
+    registry.register({
+      name: "contaazul.lookup_cep",
+      description: "Lookup CEP",
+      parameters: z.object({ cep: z.string() }),
+      execute: async () =>
+        receipt("contaazul.lookup_cep", {
+          idCidade: 5413,
+          nmBairro: "CENTRO",
+          nmEndereco: "RUA 10"
+        })
+    });
+
+    await runInteractiveFlowTurn({
+      request: "começar",
+      registry,
+      sessionId: "sess_lookup",
+      store,
+      params: { __interactive: { flow: "anchor", action: "start_contaazul_create_customer" } }
+    });
+    await runInteractiveFlowTurn({
+      request: "MAIS NEGOCIOS",
+      registry,
+      sessionId: "sess_lookup",
+      store,
+      params: {
+        __interactive: { flow: "contaazul_create_customer", action: "select_tenant" },
+        tenantId: 3047702,
+        relationId: "rel_mais",
+        tenantName: "MAIS NEGOCIOS"
+      }
+    });
+
+    const lookedUp = await runInteractiveFlowTurn({
+      request: "",
+      registry,
+      sessionId: "sess_lookup",
+      store,
+      params: {
+        __interactive: { flow: "contaazul_create_customer", action: "lookup_cnpj" },
+        personType: "Jurídica",
+        document: "05.570.714/0001-59"
+      }
+    });
+
+    expect(lookedUp.handled).toBe(true);
+    if (!lookedUp.handled) throw new Error("expected handled result");
+    expect(lookedUp.result.summary).toContain("Dados do CNPJ carregados");
+    expect(lookedUp.result.formDefaults).toMatchObject({
+      personType: "Jurídica",
+      document: "05.570.714/0001-59",
+      name: "AZUOS ASSESSORIA",
+      companyName: "AZUOS ASSESSORIA CONTABIL LTDA",
+      email: "contato@azuos.com.br",
+      zipcode: "74000-000",
+      numberAddress: "100"
+    });
+  });
+
   it("runs the Conta Azul update-due-date flow through dry-run", async () => {
     const store = createInteractiveFlowStore();
     const registry = createToolRegistry();
     const calls: unknown[] = [];
     registerTenantTools(registry);
+    registerSearchTools(registry);
     registry.register({
       name: "contaazul.search_financial_statement",
       description: "Search statement",
       parameters: z.object({ relationId: z.string(), query: z.string().optional() }),
-      execute: async () =>
-        receipt("contaazul.search_financial_statement", [
-          { id: "inst_1", financialEventId: "fe_1", installmentId: "inst_1", description: "Mensalidade junho", value: 150, dueDateIso: "2026-06-10", customerName: "JOÃO LTDA", status: "PENDING" }
-        ])
+      execute: async (params) => {
+        calls.push(params);
+        return receipt("contaazul.search_financial_statement", [
+          {
+            id: "inst_1",
+            financialEventId: "fe_1",
+            installmentId: "inst_1",
+            description: "Mensalidade junho",
+            value: 150,
+            dueDateIso: "2026-06-10",
+            customerName: "AZUOS ASSESSORIA CONTÁBIL LTDA",
+            status: "PENDING"
+          },
+          {
+            id: "inst_2",
+            financialEventId: "fe_2",
+            installmentId: "inst_2",
+            description: "Mensalidade maio",
+            value: 120,
+            dueDateIso: "2026-05-10",
+            customerName: "AZUOS ASSESSORIA CONTÁBIL LTDA",
+            status: "PAID"
+          }
+        ]);
+      }
     });
     registry.register({
       name: "contaazul.update_due_date_reissue_boleto_workflow",
@@ -878,36 +1082,93 @@ describe("interactive flow controller", () => {
       parameters: z.object({}).passthrough(),
       execute: async (params) => {
         calls.push(params);
-        return { ...receipt("contaazul.update_due_date_reissue_boleto_workflow", { approvalPreview: { operationId: "op_ca_update" } }), status: "planned" } satisfies ToolReceipt;
+        return {
+          ...receipt("contaazul.update_due_date_reissue_boleto_workflow", {
+            approvalPreview: { operationId: "op_ca_update" }
+          }),
+          status: "planned"
+        } satisfies ToolReceipt;
       }
     });
 
     await runInteractiveFlowTurn({
-      request: "começar", registry, sessionId: "sess_cu", store,
+      request: "começar",
+      registry,
+      sessionId: "sess_cu",
+      store,
       params: { __interactive: { flow: "anchor", action: "start_contaazul_update_due_date" } }
     });
-    const choices = await runInteractiveFlowTurn({
-      request: "MAIS NEGOCIOS", registry, sessionId: "sess_cu", store,
-      params: { __interactive: { flow: "contaazul_update_due_date", action: "select_tenant" }, tenantId: 3047702, relationId: "rel_mais", tenantName: "MAIS NEGOCIOS" }
+
+    const form = await runInteractiveFlowTurn({
+      request: "MAIS NEGOCIOS",
+      registry,
+      sessionId: "sess_cu",
+      store,
+      params: {
+        __interactive: { flow: "contaazul_update_due_date", action: "select_tenant" },
+        tenantId: 3047702,
+        relationId: "rel_mais",
+        tenantName: "MAIS NEGOCIOS"
+      }
     });
-    expect(choices.handled).toBe(true);
-    if (!choices.handled) throw new Error("expected handled result");
-    expect(choices.result.choices?.[0]).toMatchObject({
-      id: "statement:inst_1",
-      params: { __interactive: { flow: "contaazul_update_due_date", action: "select_statement" }, financialEventId: "fe_1", installmentId: "inst_1" }
+    expect(form.handled).toBe(true);
+    if (!form.handled) throw new Error("expected handled result");
+    expect(form.result).toMatchObject({
+      formId: "contaazul_update_due_date",
+      missingFields: ["customerId", "pendingOnly", "chargeIds", "dueDateBr"]
     });
-    const askDate = await runInteractiveFlowTurn({
-      request: "Mensalidade junho", registry, sessionId: "sess_cu", store,
-      params: { __interactive: { flow: "contaazul_update_due_date", action: "select_statement" }, financialEventId: "fe_1", installmentId: "inst_1" }
+
+    const withCharges = await runInteractiveFlowTurn({
+      request: "",
+      registry,
+      sessionId: "sess_cu",
+      store,
+      params: {
+        __interactive: { flow: "contaazul_update_due_date", action: "load_contaazul_statements" },
+        customerId: "cust_1",
+        customerName: "AZUOS ASSESSORIA CONTÁBIL LTDA",
+        pendingOnly: "pending"
+      }
     });
-    expect(askDate.handled).toBe(true);
-    if (!askDate.handled) throw new Error("expected handled result");
-    expect(askDate.result).toMatchObject({ missingFields: ["dueDateBr"] });
-    const planned = await runInteractiveFlowTurn({ request: "20/07/2026", registry, sessionId: "sess_cu", store });
+    expect(withCharges.handled).toBe(true);
+    if (!withCharges.handled) throw new Error("expected handled result");
+    expect(calls[0]).toMatchObject({
+      relationId: "rel_mais",
+      query: "AZUOS"
+    });
+    expect(withCharges.result.formChoices?.chargeId).toHaveLength(1);
+    expect(withCharges.result.formChoices?.chargeId?.[0]).toMatchObject({
+      id: "contaazul-statement:inst_1",
+      label: "Mensalidade junho"
+    });
+
+    const planned = await runInteractiveFlowTurn({
+      request: "Preparar alteração",
+      registry,
+      sessionId: "sess_cu",
+      store,
+      params: {
+        __interactive: { flow: "contaazul_update_due_date", action: "submit_contaazul_update_details" },
+        customerId: "cust_1",
+        customerName: "AZUOS ASSESSORIA CONTÁBIL LTDA",
+        pendingOnly: "pending",
+        chargeIds: ["inst_1"],
+        dueDateBr: "20/07/2026"
+      }
+    });
     expect(planned.handled).toBe(true);
     if (!planned.handled) throw new Error("expected handled result");
     expect(planned.draftOperationId).toBe("op_ca_update");
-    expect(calls).toEqual([{ tenantId: 3047702, financialEventId: "fe_1", installmentId: "inst_1", dueDateIso: "2026-07-20" }]);
+    expect(planned.draft).toMatchObject({
+      operationId: "op_ca_update",
+      toolName: "contaazul.update_due_date_reissue_boleto_workflow",
+      params: {
+        tenantId: 3047702,
+        financialEventId: "fe_1",
+        installmentId: "inst_1",
+        dueDateIso: "2026-07-20"
+      }
+    });
   });
 
   it("opens the boleto flow at the sale form when pre-seeded with a customer", async () => {

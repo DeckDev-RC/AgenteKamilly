@@ -3,6 +3,7 @@ import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   plugins: [react()],
+  assetsInclude: ["**/*.png"],
   test: {
     globals: false,
     environment: "jsdom",
